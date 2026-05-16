@@ -51,13 +51,13 @@
   top: -15px;
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(135deg, var(--primary-accent), var(--primary-accent-hover));
+  background: var(--gradient-main);
   color: white;
   padding: 6px 16px;
-  border-radius: 20px;
+  border-radius: var(--radius-pill);
   font-size: 0.85rem;
   font-weight: 600;
-  box-shadow: 0 4px 10px var(--primary-accent-glow);
+  box-shadow: 0 4px 12px var(--primary-accent-glow);
 }
 
 .pack-name {
@@ -86,7 +86,10 @@
 .pack-credits {
   font-size: 1.5rem;
   font-weight: 600;
-  color: var(--secondary-accent);
+  background: var(--gradient-main);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   margin-bottom: 2rem;
 }
 

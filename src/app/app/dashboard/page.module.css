@@ -46,9 +46,10 @@
   font-size: 3.5rem;
   font-weight: 700;
   line-height: 1;
-  background: linear-gradient(135deg, var(--secondary-accent) 0%, var(--primary-accent) 100%);
+  background: var(--gradient-main);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .balance-currency {
@@ -73,7 +74,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 251, 245, 0.7);
   border-radius: 12px;
   border: 1px solid var(--surface-border);
 }
@@ -105,7 +106,7 @@
   align-items: center;
   gap: 1rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 251, 245, 0.7);
   border: 1px solid var(--surface-border);
   border-radius: 12px;
   color: var(--text-primary);

@@ -150,7 +150,7 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
           align-items: center;
           padding: 1rem 1.5rem;
           border-bottom: 1px solid var(--surface-border);
-          background: rgba(0, 0, 0, 0.2);
+          background: var(--surface-secondary);
         }
 
         .status-indicator {
@@ -162,20 +162,20 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
         .dot {
           width: 10px;
           height: 10px;
-          background-color: #f97316;
+          background-color: var(--primary-accent);
           border-radius: 50%;
           display: inline-block;
         }
 
         .dot.pulse {
-          box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7);
+          box-shadow: 0 0 0 0 var(--primary-accent-glow);
           animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
-          0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7); }
-          70% { box-shadow: 0 0 0 10px rgba(249, 115, 22, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+          0% { box-shadow: 0 0 0 0 var(--primary-accent-glow); }
+          70% { box-shadow: 0 0 0 10px rgba(255, 136, 0, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(255, 136, 0, 0); }
         }
 
         .status-text {
@@ -187,10 +187,11 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
           display: flex;
           align-items: center;
           gap: 0.5rem;
-          background: var(--surface-color);
+          background: #FFFFFF;
           padding: 0.5rem 1rem;
-          border-radius: 20px;
-          border: 1px solid var(--surface-border);
+          border-radius: var(--radius-pill);
+          border: 1px solid var(--primary-accent);
+          color: var(--primary-accent);
           transition: all 0.3s ease;
         }
 
@@ -223,6 +224,7 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
           display: flex;
           flex-direction: column;
           gap: 1rem;
+          background: #FFFBF5;
         }
 
         .messages-container::-webkit-scrollbar {
@@ -274,9 +276,9 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
         }
 
         .message-bubble.expert {
-          background: var(--surface-color);
+          background: #FFFFFF;
           border: 1px solid var(--surface-border);
-          color: var(--text-primary);
+          color: var(--text-secondary);
           border-bottom-left-radius: 4px;
         }
 
@@ -295,7 +297,7 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
         .input-container {
           padding: 1rem 1.5rem;
           border-top: 1px solid var(--surface-border);
-          background: rgba(0, 0, 0, 0.2);
+          background: var(--surface-secondary);
         }
 
         .input-form {
@@ -306,14 +308,18 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
 
         .chat-input {
           flex: 1;
-          background: var(--surface-color);
+          background: #FFFFFF;
           border: 1px solid var(--surface-border);
           padding: 1rem 1.5rem;
-          border-radius: 24px;
+          border-radius: var(--radius-pill);
           color: var(--text-primary);
           font-family: var(--font-family);
           font-size: 1rem;
           transition: all 0.2s ease;
+        }
+
+        .chat-input::placeholder {
+          color: var(--text-muted);
         }
 
         .chat-input:focus {

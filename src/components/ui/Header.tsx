@@ -3,9 +3,11 @@ import styles from './Header.module.css';
 
 export default function Header() {
   return (
-    <header className={`glass-panel ${styles['main-header']} animate-fade-in`}>
+    <header className={`${styles['main-header']} animate-fade-in`}>
       <div className={styles.logo}>
-        <span className="gradient-text-accent">AstroChat</span>
+        <Link href="/">
+          <span className="gradient-text">AstroChat</span>
+        </Link>
       </div>
 
       <nav className={styles['nav-links']}>
@@ -15,8 +17,8 @@ export default function Header() {
       </nav>
 
       <div className={styles['auth-actions']}>
-        <button className="btn-secondary">Log In</button>
-        <button className="btn-primary hover-lift">Sign Up</button>
+        <button type="button" className="btn-ghost">Log In</button>
+        <button type="button" className="btn-gradient hover-lift">Sign Up</button>
       </div>
     </header>
   );

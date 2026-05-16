@@ -12,9 +12,9 @@ export default function HomePage() {
       <div className={styles['hero-section']}>
         <div className={`${styles['hero-content']} animate-fade-in`}>
           <div className={styles.badge}>🚀 The Next-Gen Chat Experience</div>
-          <h1 className={styles['hero-title']}>
+          <h1 className={`${styles['hero-title']} gradient-text`}>
             Connect seamlessly.<br />
-            <span className="gradient-text">Pay only for what you use.</span>
+            Pay only for what you use.
           </h1>
           <p className={styles['hero-subtitle']}>
             Purchase credits, book time slots, and experience crystal clear realtime chat without expensive subscriptions. The future of consulting and mentoring is here.
