@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import type { SessionState } from '@/lib/sessionRules';
 
 interface Message {
   id: string;
@@ -11,51 +13,52 @@ interface Message {
 
 interface ChatWindowProps {
   sessionId: string;
-  initialCredits: number;
+  initialState: SessionState;
 }
 
-export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProps) {
+const TICK_INTERVAL_MS = 5000;
+
+export default function ChatWindow({ sessionId, initialState }: ChatWindowProps) {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', text: "Session started. You are now connected with the expert.", sender: 'system', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
     { id: '2', text: "Hi there! How can I help you today?", sender: 'expert', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
   ]);
   const [inputText, setInputText] = useState('');
-  const [credits, setCredits] = useState(initialCredits);
-  const [isWarning, setIsWarning] = useState(false);
+  const [state, setState] = useState<SessionState>(initialState);
+  const [leaving, setLeaving] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Demo credit burn simulation
+  // Server-authoritative billing: poll the tick endpoint so overage/grace/hard-stop
+  // are driven by wall-clock time on the server, not a client-side interval.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCredits(prev => {
-        const next = prev - 1;
-        if (next <= 10 && next > 0) setIsWarning(true);
-        if (next <= 0) {
-          clearInterval(timer);
-          return 0;
-        }
-        return next;
-      });
-    }, 10000); // Burn 1 credit every 10 seconds for demo purposes
-    
+    if (state.status === 'ended') return;
+
+    const timer = setInterval(async () => {
+      const res = await fetch(`/api/sessions/${sessionId}/tick`, { method: 'POST' });
+      if (res.ok) {
+        setState(await res.json());
+      }
+    }, TICK_INTERVAL_MS);
+
     return () => clearInterval(timer);
-  }, []);
+  }, [sessionId, state.status]);
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || credits <= 0) return;
+    if (!inputText.trim() || state.status === 'ended') return;
 
-    setMessages(prev => [...prev, { 
-      id: Date.now().toString(), 
-      text: inputText, 
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      text: inputText,
       sender: "user",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }]);
-    
+
     setInputText('');
 
     // Mock expert reply
@@ -69,6 +72,19 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
     }, 2000);
   };
 
+  async function handleLeave() {
+    setLeaving(true);
+    try {
+      await fetch(`/api/sessions/${sessionId}/end`, { method: 'POST' });
+      router.push('/app/dashboard');
+    } finally {
+      setLeaving(false);
+    }
+  }
+
+  const isWarning = state.isLowBalance || state.status === 'grace';
+  const isDanger = state.status !== 'active';
+
   return (
     <div className="chat-island-container glass-panel">
       {/* Header */}
@@ -76,14 +92,27 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
         <div className="header-info">
           <div className="status-indicator">
             <span className="dot pulse"></span>
-            <span className="status-text">Live Session #{sessionId}</span>
+            <span className="status-text">
+              {state.status === 'grace'
+                ? `Grace period — top up now (${state.graceSecondsRemaining}s left)`
+                : state.status === 'ended'
+                ? 'Session ended'
+                : `Live Session #${sessionId}`}
+            </span>
           </div>
         </div>
-        
-        <div className={`credit-display ${isWarning ? 'warning' : ''} ${credits === 0 ? 'danger' : ''}`}>
-          <span className="credit-icon">💎</span>
-          <span className="credit-value">{credits}</span>
-          <span className="credit-label">Credits left</span>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div className={`credit-display ${isWarning ? 'warning' : ''} ${isDanger ? 'danger' : ''}`}>
+            <span className="credit-icon">💎</span>
+            <span className="credit-value">{state.balance}</span>
+            <span className="credit-label">Credits left</span>
+          </div>
+          {state.status !== 'ended' && (
+            <button className="btn-ghost" onClick={handleLeave} disabled={leaving}>
+              {leaving ? 'Leaving…' : 'Leave'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -106,13 +135,13 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
 
       {/* Input Area */}
       <div className="input-container">
-        {credits > 0 ? (
+        {state.status !== 'ended' ? (
           <form onSubmit={handleSend} className="input-form">
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type your message..." 
+              placeholder="Type your message..."
               className="chat-input"
               autoComplete="off"
             />
@@ -125,7 +154,7 @@ export default function ChatWindow({ sessionId, initialCredits }: ChatWindowProp
           </form>
         ) : (
           <div className="out-of-credits">
-            <p>Session ended. You have run out of credits.</p>
+            <p>Session ended. {state.balance <= 0 ? 'You ran out of credits.' : ''}</p>
             <button className="btn-primary" onClick={() => window.location.href = '/pricing'}>
               Top Up Credits
             </button>

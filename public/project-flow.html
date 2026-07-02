@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AstroChat — Project Flow Tracker</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-border: #262b36;
+    --text: #e6e8ec;
+    --text-muted: #8b92a3;
+    --accent: #ff8800;
+    --live: #22c55e;
+    --mock: #f59e0b;
+    --planned: #6b7280;
+    --gap: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 2rem 1.5rem 4rem;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header.page-head { margin-bottom: 2rem; }
+  h1 { font-size: 1.8rem; margin: 0 0 0.25rem; }
+  .accent { color: var(--accent); }
+  .meta-line { color: var(--text-muted); font-size: 0.9rem; }
+  #summary { margin-top: 0.75rem; line-height: 1.5; color: #c7cbd4; }
+  #err { display:none; background:#3a1d1d; border:1px solid var(--gap); color:#ffb4b4; padding:1rem; border-radius:8px; margin-bottom:1.5rem; }
+
+  section { margin-bottom: 2.5rem; }
+  section h2 {
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+  }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .card-title { font-weight: 600; font-size: 1rem; }
+  .card-sub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+  .card-desc { font-size: 0.87rem; color: #c7cbd4; line-height: 1.45; }
+
+  .badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .badge.live { color: var(--live); border-color: var(--live); background: rgba(34,197,94,0.1); }
+  .badge.mock, .badge\.mock-data, .badge.mock-data { color: var(--mock); border-color: var(--mock); background: rgba(245,158,11,0.1); }
+  .badge.ui-only { color: var(--mock); border-color: var(--mock); background: rgba(245,158,11,0.1); }
+  .badge.planned { color: var(--planned); border-color: var(--planned); background: rgba(107,114,128,0.15); }
+  .badge.designed-not-connected { color: var(--planned); border-color: var(--planned); background: rgba(107,114,128,0.15); }
+  .badge.mock-ui { color: var(--mock); border-color: var(--mock); background: rgba(245,158,11,0.1); }
+  .badge.partial-mock { color: var(--mock); border-color: var(--mock); background: rgba(245,158,11,0.1); }
+  .badge.partial-live { color: #3b82f6; border-color: #3b82f6; background: rgba(59,130,246,0.12); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
+  th, td { text-align: left; padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--panel-border); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.route { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); white-space: nowrap; }
+
+  .flow-card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 1.1rem 1.2rem; margin-bottom: 1rem; }
+  .flow-card .card-top { margin-bottom: 0.75rem; }
+  ol.steps { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.4rem; }
+  ol.steps li { font-size: 0.87rem; line-height: 1.4; color: #c7cbd4; }
+  ol.steps li.missing { color: var(--mock); }
+  ol.steps li.planned-step { color: var(--planned); }
+
+  ul.gaps { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  ul.gaps li { font-size: 0.9rem; color: #e2b8b8; line-height: 1.45; }
+
+  .db-tables { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.75rem; }
+  .db-table-chip { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.85rem; min-width: 180px; }
+  .db-table-chip b { font-family: ui-monospace, monospace; color: var(--accent); }
+
+  .changelog { display: flex; flex-direction: column; gap: 0.5rem; }
+  .changelog .entry { font-size: 0.87rem; color: #c7cbd4; display: flex; gap: 0.75rem; }
+  .changelog .date { color: var(--text-muted); font-family: ui-monospace, monospace; white-space: nowrap; }
+
+  footer { color: var(--text-muted); font-size: 0.8rem; margin-top: 3rem; border-top: 1px solid var(--panel-border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="page-head">
+      <h1><span class="accent">●</span> Project Flow Tracker</h1>
+      <div class="meta-line" id="meta-line">Loading…</div>
+      <p id="summary"></p>
+    </header>
+
+    <div id="err">Could not load <code>project-flow.json</code> from this location. If you opened this file directly (file://), start the dev server (<code>npm run dev</code>) and visit <code>/project-flow.html</code> instead so the JSON can be fetched from the same origin.</div>
+
+    <section id="sec-pages">
+      <h2>Pages</h2>
+      <div class="grid" id="pages-grid"></div>
+    </section>
+
+    <section id="sec-components">
+      <h2>Components</h2>
+      <div class="grid" id="components-grid"></div>
+    </section>
+
+    <section id="sec-api">
+      <h2>API Routes</h2>
+      <table>
+        <thead><tr><th>Route</th><th>Status</th><th>Description</th></tr></thead>
+        <tbody id="api-body"></tbody>
+      </table>
+    </section>
+
+    <section id="sec-planned-api">
+      <h2>Planned API Routes</h2>
+      <table>
+        <thead><tr><th>Route</th><th>Status</th><th>Description</th></tr></thead>
+        <tbody id="planned-api-body"></tbody>
+      </table>
+    </section>
+
+    <section id="sec-db">
+      <h2>Database</h2>
+      <div class="flow-card">
+        <div class="card-top">
+          <div class="card-title" id="db-schema-file"></div>
+          <span class="badge" id="db-status"></span>
+        </div>
+        <div class="card-desc" id="db-notes"></div>
+        <div class="db-tables" id="db-tables"></div>
+      </div>
+    </section>
+
+    <section id="sec-flows">
+      <h2>User Flows</h2>
+      <div id="flows-list"></div>
+    </section>
+
+    <section id="sec-gaps">
+      <h2>Known Gaps</h2>
+      <ul class="gaps" id="gaps-list"></ul>
+    </section>
+
+    <section id="sec-changelog">
+      <h2>Changelog</h2>
+      <div class="changelog" id="changelog-list"></div>
+    </section>
+
+    <footer>Source of truth: <code>public/project-flow.json</code> — update it after each change; this page just renders it.</footer>
+  </div>
+
+<script>
+function badge(status) {
+  const cls = (status || 'planned').toLowerCase().replace(/\s+/g, '-');
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+
+function renderCards(containerId, items, subKey) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.map(item => `
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">${item.title || item.name}</div>
+        ${badge(item.status)}
+      </div>
+      <div class="card-sub">${item[subKey] || ''}</div>
+      <div class="card-desc">${item.description || ''}</div>
+    </div>
+  `).join('');
+}
+
+function renderApiTable(tbodyId, items) {
+  const el = document.getElementById(tbodyId);
+  el.innerHTML = items.map(item => `
+    <tr>
+      <td class="route">${item.route}</td>
+      <td>${badge(item.status)}</td>
+      <td>${item.description}</td>
+    </tr>
+  `).join('');
+}
+
+function stepClass(step) {
+  if (step.startsWith('[MISSING]')) return 'missing';
+  if (step.startsWith('[PLANNED]')) return 'planned-step';
+  return '';
+}
+
+function renderFlows(items) {
+  const el = document.getElementById('flows-list');
+  el.innerHTML = items.map(flow => `
+    <div class="flow-card">
+      <div class="card-top">
+        <div class="card-title">${flow.name}</div>
+        ${badge(flow.status)}
+      </div>
+      <ol class="steps">
+        ${flow.steps.map(s => `<li class="${stepClass(s)}">${s}</li>`).join('')}
+      </ol>
+    </div>
+  `).join('');
+}
+
+fetch('project-flow.json')
+  .then(r => {
+    if (!r.ok) throw new Error('fetch failed');
+    return r.json();
+  })
+  .then(data => {
+    document.getElementById('meta-line').textContent =
+      `${data.meta.projectName} · Last updated ${data.meta.lastUpdated} · ${data.meta.stack.join(' · ')}`;
+    document.getElementById('summary').textContent = data.meta.summary;
+
+    renderCards('pages-grid', data.pages.map(p => ({...p, sub: p.route})), 'route');
+    renderCards('components-grid', data.components, 'file');
+    renderApiTable('api-body', data.apiRoutes);
+    renderApiTable('planned-api-body', data.plannedApiRoutes);
+
+    document.getElementById('db-schema-file').textContent = data.database.schemaFile + ' (' + data.database.engine + ')';
+    document.getElementById('db-status').outerHTML = badge(data.database.status);
+    document.getElementById('db-notes').textContent = data.database.notes;
+    document.getElementById('db-tables').innerHTML = data.database.tables.map(t =>
+      `<div class="db-table-chip"><b>${t.name}</b><br>${t.purpose}</div>`
+    ).join('');
+
+    renderFlows(data.userFlows);
+
+    document.getElementById('gaps-list').innerHTML = data.knownGaps.map(g => `<li>${g}</li>`).join('');
+
+    document.getElementById('changelog-list').innerHTML = data.changelog
+      .slice().reverse()
+      .map(c => `<div class="entry"><span class="date">${c.date}</span><span>${c.change}</span></div>`)
+      .join('');
+  })
+  .catch(() => {
+    document.getElementById('err').style.display = 'block';
+  });
+</script>
+</body>
+</html>
