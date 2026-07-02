@@ -1,3 +1,4 @@
+
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import styles from './page.module.css';
@@ -6,7 +7,9 @@ export const metadata: Metadata = {
   title: 'Connect & Chat instantly',
 };
 
+
 export default function HomePage() {
+  
   return (
     <>
       <div className={styles['hero-section']}>
@@ -21,7 +24,6 @@ export default function HomePage() {
           </p>
           <div className={styles['hero-cta']}>
             <Link href="/pricing" className="btn-primary hover-lift">View Pricing</Link>
-            <Link href="/app/dashboard" className="btn-secondary">Go to Dashboard</Link>
           </div>
         </div>
 

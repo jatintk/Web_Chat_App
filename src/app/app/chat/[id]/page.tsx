@@ -1,5 +1,9 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import { redirect, notFound } from 'next/navigation';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
+import { tickSession, SessionNotFoundError, ForbiddenError } from '@/lib/sessions';
 import ChatWindow from '@/components/islands/ChatWindow';
 import styles from './page.module.css';
 
@@ -17,6 +21,21 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function ChatPage({ params }: Props) {
   const { id } = await params;
 
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    redirect('/user/login');
+  }
+
+  let initialState;
+  try {
+    initialState = await tickSession(session.user.id, id);
+  } catch (err) {
+    if (err instanceof SessionNotFoundError || err instanceof ForbiddenError) {
+      notFound();
+    }
+    throw err;
+  }
+
   return (
     <div className={`${styles['chat-page-container']} animate-fade-in`}>
       <div className={styles['page-header']}>
@@ -31,7 +50,7 @@ export default async function ChatPage({ params }: Props) {
         <p className={styles.subtitle}>Your secure, realtime session is active. Messages are strictly confidential.</p>
       </div>
 
-      <ChatWindow sessionId={id} initialCredits={10} />
+      <ChatWindow sessionId={id} initialState={initialState} />
     </div>
   );
 }

@@ -32,4 +32,7 @@ next-env.d.ts
 *.schema.json
 schema.sql
 
+# claude
+.claude/
 
+.gitignore

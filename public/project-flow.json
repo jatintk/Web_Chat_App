@@ -1,0 +1,287 @@
+{
+  "meta": {
+    "projectName": "AstroChat (Chat_App)",
+    "lastUpdated": "2026-07-01",
+    "stack": ["Next.js 15 (App Router)", "React 19", "TypeScript", "NextAuth v4", "PostgreSQL (Neon, connected via node-postgres)", "bcryptjs"],
+    "summary": "Credit-based chat app: users buy credit packs, book time slots, and chat with a server-authoritative timer that bills overage per minute. Auth, credit balance, slot booking, and the full session billing loop (overage charges, low-balance warning, grace period, hard stop) are live end-to-end against Postgres. Only the credit *purchase* loop (Razorpay) and real-time messaging are still mocked or design-only.",
+    "note": "This file is hand-updated after each meaningful change. See PROJECT_TRACKER.md for narrative notes."
+  },
+  "pages": [
+    {
+      "route": "/",
+      "file": "src/app/page.tsx",
+      "title": "Landing Page",
+      "status": "live",
+      "description": "Marketing hero, mock chat preview, and features grid. Fully static.",
+      "usesComponents": ["Header"]
+    },
+    {
+      "route": "/pricing",
+      "file": "src/app/pricing/page.tsx",
+      "title": "Pricing & Credit Packs",
+      "status": "ui-only",
+      "description": "Three credit packs (Starter/Pro/Expert) rendered from hardcoded JSX. 'Buy Now' buttons have no onClick handler yet.",
+      "usesComponents": ["Header"]
+    },
+    {
+      "route": "/user/login",
+      "file": "src/app/user/login/page.tsx",
+      "title": "Log In",
+      "status": "live",
+      "description": "Email/password form. Calls next-auth signIn('credentials', ...) and redirects to /app/dashboard on success; shows 'Invalid email or password.' on failure. Also has a 'Continue with Google' button (signIn('google', ...)).",
+      "usesComponents": ["Header", "GoogleIcon"]
+    },
+    {
+      "route": "/user/signup",
+      "file": "src/app/user/signup/page.tsx",
+      "title": "Sign Up",
+      "status": "live",
+      "description": "Name/email/password/confirm form. Client-side password-match check, then POSTs to /api/register to create the user, then auto signs in and redirects to /app/dashboard. Also has a 'Continue with Google' button.",
+      "usesComponents": ["Header", "GoogleIcon"]
+    },
+    {
+      "route": "/app/dashboard",
+      "file": "src/app/app/dashboard/page.tsx",
+      "title": "Dashboard",
+      "status": "partial-live",
+      "description": "Server component: redirects to /user/login if unauthenticated, greets the real user, shows the real credit balance, and lists real upcoming bookings via listUpcomingBookings() (BookingActions island handles booking + joining). Quick Actions (Find Expert / Ledger History / Settings) are still dead buttons.",
+      "usesComponents": ["Header", "BookingActions"]
+    },
+    {
+      "route": "/app/chat/[id]",
+      "file": "src/app/app/chat/[id]/page.tsx",
+      "title": "Active Chat Session",
+      "status": "partial-live",
+      "description": "Server component: redirects to /user/login if unauthenticated, calls tickSession() once server-side (id is now a real chat_sessions UUID) to get authoritative initial state, 404s via notFound() if the session doesn't exist or isn't the caller's. Session billing (overage/grace/hard-stop) is fully real; the chat messages themselves are still a client-side mock with a canned auto-reply.",
+      "usesComponents": ["Header", "ChatWindow"]
+    }
+  ],
+  "components": [
+    {
+      "name": "Header",
+      "file": "src/components/ui/Header.tsx",
+      "status": "live",
+      "description": "Global nav bar. Auth-aware (shows Login/Signup vs Dashboard/Logout) via next-auth's useSession, wrapped in its own SessionProvider."
+    },
+    {
+      "name": "ChatWindow",
+      "file": "src/components/islands/ChatWindow.tsx",
+      "status": "partial-live",
+      "description": "Billing is now real: polls POST /api/sessions/[id]/tick every 5s and renders the server's authoritative status (active/grace/ended), balance, and grace countdown; 'Leave' button calls the end endpoint. The chat messages themselves are still a local-only mock (canned expert auto-reply, nothing persisted or sent to another party)."
+    },
+    {
+      "name": "BookingActions",
+      "file": "src/components/islands/BookingActions.tsx",
+      "status": "live",
+      "description": "Client island rendered on the dashboard. Lists existing upcoming bookings with a Join button (POST /api/sessions/join then navigates to /app/chat/[sessionId]) and, for not-yet-joined ('scheduled') bookings, a Cancel button (POST /api/bookings/[id]/cancel, shows the refund result inline, then router.refresh()s the dashboard). Plus 'Book Standard' / 'Book Extended' buttons (POST /api/bookings then auto-joins). Shows inline errors (e.g. insufficient credits)."
+    },
+    {
+      "name": "db (pool + withTransaction)",
+      "file": "src/lib/db.ts",
+      "status": "live",
+      "description": "Singleton node-postgres Pool reading DATABASE_URL from .env.local (gitignored), cached on globalThis in dev. Also exports withTransaction() (BEGIN/COMMIT/ROLLBACK helper) used by bookings.ts and sessions.ts for atomic multi-statement writes."
+    },
+    {
+      "name": "users lib",
+      "file": "src/lib/users.ts",
+      "status": "live",
+      "description": "createUser() and verifyUser() against the real users table. Passwords hashed with bcryptjs (10 rounds); duplicate email throws EmailInUseError (mapped to Postgres unique-violation code 23505). verifyUser() returns null if password_hash is NULL (Google-only accounts can't log in via Credentials). findOrCreateOAuthUser(email, name): atomic upsert (INSERT ... ON CONFLICT (email) DO UPDATE) used by the Google provider -- links to an existing account by email without overwriting its password_hash, or creates a new password-less row."
+    },
+    {
+      "name": "GoogleIcon",
+      "file": "src/components/ui/GoogleIcon.tsx",
+      "status": "live",
+      "description": "Shared multi-color 'G' SVG icon used by the 'Continue with Google' buttons on both login and signup pages."
+    },
+    {
+      "name": "ledger lib",
+      "file": "src/lib/ledger.ts",
+      "status": "live",
+      "description": "getBalance(userId) -> SUM(amount) over ledger_entries, coalesced to 0. Read-only; ledger_entries is now written by bookings.ts (slot_booking) and sessions.ts (overage_charge) in addition to manual/test inserts."
+    },
+    {
+      "name": "authOptions",
+      "file": "src/lib/auth.ts",
+      "status": "live",
+      "description": "Shared NextAuthOptions (moved out of the route handler) so server components and API routes can call getServerSession(authOptions) to identify the current user."
+    },
+    {
+      "name": "sessionRules",
+      "file": "src/lib/sessionRules.ts",
+      "status": "live",
+      "description": "Constants matching session_rules.md: SLOT_TYPES (standard: 50cr/30min, extended: 90cr/60min), OVERAGE_RATE_PER_MINUTE (2), LOW_BALANCE_WARNING_CREDITS (4), GRACE_PERIOD_MS (2min). Also the shared SessionState type used by both the server lib and the client ChatWindow."
+    },
+    {
+      "name": "bookings lib",
+      "file": "src/lib/bookings.ts",
+      "status": "live",
+      "description": "createBooking(userId, slotType): per-user Postgres advisory lock (pg_advisory_xact_lock) + transaction, checks balance, inserts the booking row and a slot_booking ledger debit atomically. Throws InsufficientCreditsError if balance < cost. listUpcomingBookings(userId) returns scheduled/active bookings. cancelBooking(userId, bookingId): tiered refund per session_rules.md (100% if cancelled >24h before starts_at, 50% otherwise, 0% if the booking's window already elapsed unjoined); refund amount is derived from the original slot_booking ledger charge, not a stored price. Blocks cancelling an 'active' (already-joined) or already-finished booking."
+    },
+    {
+      "name": "sessions lib",
+      "file": "src/lib/sessions.ts",
+      "status": "live",
+      "description": "The core billing engine. joinSession() creates (or resumes) a chat_sessions row for a booking. tickSession() is the server-authoritative heart: locks the session row (SELECT ... FOR UPDATE), computes elapsed/overage minutes from wall-clock time vs started_at, charges only the incremental overage minutes not yet reflected in ledger_entries (so concurrent/overlapping calls can't double-charge), transitions active -> grace when balance hits <=0, and grace -> ended if 2 minutes pass without a top-up (or back to active if balance goes positive again). endSession() lets a user manually leave early."
+    }
+  ],
+  "apiRoutes": [
+    {
+      "route": "/api/auth/[...nextauth]",
+      "file": "src/app/api/auth/[...nextauth]/route.ts",
+      "status": "live",
+      "description": "NextAuth with CredentialsProvider (email + password, verifyUser()) and GoogleProvider (real client ID/secret from env, PKCE). JWT session strategy; jwt callback links Google sign-ins to the real users table via findOrCreateOAuthUser() (no DB adapter is used, so this linking is done by hand) and always sets token.id to our own UUID, never Google's subject id. session callback propagates that onto session.user.id (typed via src/types/next-auth.d.ts)."
+    },
+    {
+      "route": "POST /api/register",
+      "file": "src/app/api/register/route.ts",
+      "status": "live",
+      "description": "Validates email/password (min 8 chars), calls createUser(). Returns 201 + public user on success, 409 if email already registered, 400 for missing/short fields."
+    },
+    {
+      "route": "GET /api/user/balance",
+      "file": "src/app/api/user/balance/route.ts",
+      "status": "live",
+      "description": "Returns { balance } for the signed-in user via getBalance(). 401 if not authenticated. Intended for client-side polling later; the dashboard/chat pages currently call getBalance()/tickSession() directly server-side instead of hitting this."
+    },
+    {
+      "route": "POST /api/bookings",
+      "file": "src/app/api/bookings/route.ts",
+      "status": "live",
+      "description": "Body { slotType: 'standard' | 'extended' }. Calls createBooking(). 201 + booking on success, 402 if insufficient credits, 400 for an invalid slotType, 401 if unauthenticated."
+    },
+    {
+      "route": "POST /api/sessions/join",
+      "file": "src/app/api/sessions/join/route.ts",
+      "status": "live",
+      "description": "Body { bookingId }. Calls joinSession(); creates a chat_sessions row (or resumes an existing non-ended one) and marks the booking 'active'. 200 + { sessionId }, 404/403/409 for not-found/not-yours/not-joinable."
+    },
+    {
+      "route": "POST /api/sessions/[id]/tick",
+      "file": "src/app/api/sessions/[id]/tick/route.ts",
+      "status": "live",
+      "description": "The billing heartbeat -- polled by ChatWindow every 5s. Calls tickSession(); charges overage as needed and returns the current SessionState (balance, status, grace countdown, etc). 404/403 for not-found/not-yours."
+    },
+    {
+      "route": "POST /api/sessions/[id]/end",
+      "file": "src/app/api/sessions/[id]/end/route.ts",
+      "status": "live",
+      "description": "Lets a user manually leave a session early (marks chat_sessions 'ended' and the booking 'completed'). Called by ChatWindow's 'Leave' button."
+    },
+    {
+      "route": "POST /api/bookings/[id]/cancel",
+      "file": "src/app/api/bookings/[id]/cancel/route.ts",
+      "status": "live",
+      "description": "Calls cancelBooking(). Returns { refundPercent, refundAmount } on success. 404/403/409 for not-found/not-yours/not-cancellable (already active or finished). Called by BookingActions' 'Cancel' button, shown only for 'scheduled' (not yet joined) bookings."
+    }
+  ],
+  "plannedApiRoutes": [
+    { "route": "POST /api/payments/create-order", "status": "planned", "description": "Create a Razorpay order for a credit pack. See razorpay_flow.md step 2." },
+    { "route": "POST /api/webhooks/razorpay", "status": "planned", "description": "Verify Razorpay webhook signature, idempotently credit the wallet ledger. See razorpay_flow.md step 4." }
+  ],
+  "database": {
+    "status": "connected",
+    "schemaFile": "schema.sql",
+    "engine": "PostgreSQL / Neon serverless, pooled connection",
+    "tables": [
+      { "name": "users", "purpose": "Account records (id UUID, email, name)" },
+      { "name": "ledger_entries", "purpose": "Append-only credit ledger; balance = SUM(amount) per user" },
+      { "name": "payments", "purpose": "Razorpay order/payment records with status tracking" },
+      { "name": "bookings", "purpose": "Time slot bookings (starts_at, ends_at, included_minutes)" },
+      { "name": "chat_sessions", "purpose": "Active/grace/ended chat sessions tied to a booking; grace_started_at (added 2026-07-01) tracks the 2-minute top-up window after balance hits 0" }
+    ],
+    "notes": "Live Neon Postgres database. schema.sql applied 2026-07-01 -- all 5 tables exist and are in active use (users, ledger_entries, bookings, chat_sessions); payments is still empty, waiting on Razorpay. Schema additions beyond the original draft: users.password_hash (Credentials auth; made nullable again on 2026-07-01 for Google-only accounts), chat_sessions.grace_started_at (grace-period tracking). Connection string lives in .env.local (gitignored) as DATABASE_URL; src/lib/db.ts exports a pooled client + withTransaction() helper. Note: an older ad-hoc 'users' table (integer id, username/password, 2 rows) existed in this DB before schema.sql was applied and was intentionally dropped in favor of the UUID/email schema. Also note: ledger_entries.user_id has no ON DELETE CASCADE, so deleting a user with ledger rows requires deleting those rows first (FK is RESTRICT by default); the same applies to chat_sessions.booking_id -> bookings.id (delete chat_sessions before bookings when cleaning up test data)."
+  },
+  "userFlows": [
+    {
+      "name": "Sign up / Log in (email+password)",
+      "status": "live",
+      "steps": [
+        "User fills form on /user/signup (name, email, password, confirm) or /user/login (email, password)",
+        "Signup: POST /api/register creates the user (bcrypt-hashed password) in Postgres, then auto-calls signIn('credentials')",
+        "Login: signIn('credentials') -> NextAuth authorize() -> verifyUser() checks email + bcrypt.compare() against the DB",
+        "NextAuth session created (JWT strategy, session.user.id populated)",
+        "Header switches to authenticated state, shows Dashboard link; redirect to /app/dashboard on success"
+      ]
+    },
+    {
+      "name": "Sign up / Log in with Google",
+      "status": "live",
+      "steps": [
+        "User clicks 'Continue with Google' on /user/login or /user/signup -> signIn('google', { callbackUrl: '/app/dashboard' })",
+        "Full-page redirect to Google's OAuth consent screen (accounts.google.com) with PKCE; verified the redirect URL carries the correct client_id and a redirect_uri of http://localhost:3000/api/auth/callback/google matching what's registered in Google Cloud Console",
+        "[Requires a real interactive Google login -- not completed by an automated test] User approves consent, Google redirects back to /api/auth/callback/google with an auth code",
+        "NextAuth exchanges the code for a profile (email, name); the jwt callback (account.provider === 'google') calls findOrCreateOAuthUser(email, name) -- links to an existing users row with that email (created via password signup) or creates a new password-less one",
+        "token.id / session.user.id is always our own DB UUID, never Google's subject id, so downstream code (balance, bookings, sessions) works identically regardless of how the user signed in",
+        "Verified the linking logic directly against the DB: a brand-new Google email creates one row (repeat sign-ins reuse it, no duplicates); signing in with Google using an email that already has a password-based account links to that same row without touching its password_hash, so the user can still log in either way afterward"
+      ]
+    },
+    {
+      "name": "View credit balance",
+      "status": "live",
+      "steps": [
+        "Dashboard and chat pages call getServerSession(authOptions) to identify the user (redirect to /user/login if none)",
+        "getBalance(userId) runs SELECT COALESCE(SUM(amount),0) FROM ledger_entries WHERE user_id = $1",
+        "Dashboard shows the real number instead of a hardcoded 350; chat page passes it as ChatWindow's initialCredits instead of a hardcoded 10",
+        "GET /api/user/balance exposes the same number for future client-side polling (e.g. live updates during a session)"
+      ]
+    },
+    {
+      "name": "Buy credits",
+      "status": "ui-only",
+      "steps": [
+        "User views packs on /pricing",
+        "[MISSING] Click 'Buy Now' -> POST /api/payments/create-order",
+        "[PLANNED] Razorpay Checkout modal opens with order_id",
+        "[PLANNED] Razorpay webhook -> /api/webhooks/razorpay verifies signature, credits ledger_entries",
+        "Once credited, the balance immediately shows correctly (verified by manually inserting ledger_entries rows and confirming the dashboard/chat page reflect the new sum)"
+      ]
+    },
+    {
+      "name": "Book & join a chat session",
+      "status": "live",
+      "steps": [
+        "Dashboard lists real upcoming bookings (BookingActions island) and offers 'Book Standard' (50cr/30min) or 'Book Extended' (90cr/60min)",
+        "POST /api/bookings debits the slot cost from the wallet and creates the booking, inside one transaction guarded by a per-user Postgres advisory lock (prevents a double-click from double-booking past the balance)",
+        "Booking auto-joins: POST /api/sessions/join creates a chat_sessions row (started_at = NOW()) and marks the booking 'active', then the browser navigates to /app/chat/[sessionId]",
+        "Chat page calls tickSession() server-side for the authoritative initial state; ChatWindow then polls POST /api/sessions/[id]/tick every 5s",
+        "tickSession computes elapsed/overage minutes from wall-clock time vs started_at and charges only newly-incurred overage minutes (derived from the ledger, so concurrent ticks can't double-charge) at 2 credits/min, per session_rules.md",
+        "When balance <= 0: status -> 'grace' (2-minute countdown shown in the UI); if the user tops up during grace, billing resumes; if not, status -> 'ended' and the booking -> 'completed'",
+        "'Leave' button in ChatWindow calls POST /api/sessions/[id]/end to end early",
+        "Verified end-to-end by backdating a session's started_at/grace_started_at in the DB to simulate 30+ minutes of overage: overage charges landed correctly, grace period triggered at balance <= 0 with an accurate countdown, hard stop fired after the grace window, and a follow-up booking attempt with a negative balance was correctly rejected (402)"
+      ]
+    },
+    {
+      "name": "Cancel a booking",
+      "status": "live",
+      "steps": [
+        "User clicks 'Cancel' on a not-yet-joined ('scheduled') booking in the dashboard's Sessions panel (button is hidden for 'active'/joined bookings)",
+        "POST /api/bookings/[id]/cancel -> cancelBooking(): looks up how much was originally paid from the booking's slot_booking ledger entry, then applies the tiered refund policy from session_rules.md based on how the current time compares to the booking's starts_at/ends_at",
+        "100% refund if cancelled more than 24h before starts_at, 50% otherwise, 0% if the booking's whole window (ends_at) already passed without ever being joined (no-show)",
+        "Refund (if any) is inserted as a 'refund' ledger_entries row; booking status -> 'cancelled'; attempting to cancel an already-'active' booking returns 409 ('leave it instead') and an already-finished booking also 409",
+        "Verified all three refund tiers end-to-end: a default fresh booking (starts_at ~= now) refunded at 50%; a booking with starts_at manually pushed 2 days out refunded at 100%; a booking with ends_at pushed into the past (unjoined) refunded at 0%; cancelling an already-joined ('active') booking was correctly rejected with 409. Dashboard balance and the visible booking list updated correctly via router.refresh() after a successful cancel."
+      ]
+    }
+  ],
+  "knownGaps": [
+    "payments table still unused -- no Razorpay integration code yet (design only, in razorpay_flow.md), so there is still no real way to add credits other than a manual DB insert",
+    "Chat messaging is still a local-only mock (canned auto-reply, nothing persisted, no second party) -- billing is real but the 'chat' itself isn't yet",
+    "Pricing page 'Buy Now' buttons have no onClick handlers",
+    "Dashboard Quick Actions (Find Expert / Ledger History / Settings) are still dead buttons -- e.g. there's no ledger-history view even though the data exists",
+    "The cancellation policy's >24h full-refund tier is effectively unreachable under the current 'book now, join now' flow (starts_at is always ~= booking time, never far in the future) unless a test manually pushes starts_at out -- it will become reachable once/if real advance scheduling is added",
+    "No email verification, password reset, or rate limiting on /api/register or the credentials login",
+    "No migration tool -- schema changes (password_hash, grace_started_at) are applied via one-off scripts, not tracked migrations",
+    "JWT session strategy means a deleted/disabled user's session stays valid until the token expires (30-day default) -- session isn't re-checked against the DB on every request",
+    "ledger_entries.user_id and chat_sessions.booking_id have no ON DELETE CASCADE -- deleting a user/booking with dependent rows requires deleting those rows first (FK is RESTRICT by default)",
+    "isLowBalance (<=4 credits, from session_rules.md's 'low balance warning') is implemented and wired into the UI but wasn't exercised in the live test -- only the grace-period and hard-stop paths were explicitly verified",
+    "Google OAuth was verified only up to the redirect to Google's consent screen (correct client_id/redirect_uri) plus the account-linking DB logic in isolation -- the full interactive round trip (consent screen -> callback -> real session) needs a real Google account and hasn't been exercised end-to-end. Also: while the Google Cloud OAuth consent screen is in 'Testing' publishing status, only emails added as test users in that screen can actually complete the flow -- anyone else will be blocked by Google before reaching the app."
+  ],
+  "changelog": [
+    { "date": "2026-07-01", "change": "Created project-flow.json and project-flow.html trackers; documented current app state (UI scaffold on Next.js, auth/payments/DB/chat all mocked or design-only)." },
+    { "date": "2026-07-01", "change": "Connected to a live Neon Postgres DB (src/lib/db.ts, DATABASE_URL in .env.local). Found and dropped a pre-existing incompatible 'users' table (int id, username/password), then applied schema.sql fresh -- all 5 tables now live and empty." },
+    { "date": "2026-07-01", "change": "Wired real authentication: added password_hash column to users, src/lib/users.ts (createUser/verifyUser with bcrypt), POST /api/register, rewrote NextAuth route to verify real credentials (removed the unconfigured GoogleProvider and the hardcoded John Doe user), wired signup/login pages to call these. Verified end-to-end in browser: signup creates a real DB row and auto-logs in, wrong password is rejected, duplicate email returns 409, correct password logs in." },
+    { "date": "2026-07-01", "change": "Wired real credit balance: moved NextAuthOptions into src/lib/auth.ts (shared, reusable), added src/lib/ledger.ts (getBalance), GET /api/user/balance, and auth guards + real balance on /app/dashboard and /app/chat/[id] (replacing hardcoded 350 and 10). Verified end-to-end: unauthenticated users redirect to /user/login; a fresh signup shows 0 credits; manually inserting ledger_entries rows (+250 purchase, -50 booking) immediately shows 200 on both the dashboard and the chat page after refresh." },
+    { "date": "2026-07-01", "change": "Built the full booking + session-join + server-authoritative billing loop per session_rules.md: src/lib/sessionRules.ts (constants), src/lib/bookings.ts (createBooking with a per-user advisory lock, listUpcomingBookings), src/lib/sessions.ts (joinSession, tickSession -- the billing engine, endSession), POST /api/bookings, POST /api/sessions/join, POST /api/sessions/[id]/tick, POST /api/sessions/[id]/end. Added chat_sessions.grace_started_at column. New BookingActions island wired into the dashboard (replacing the hardcoded session); ChatWindow rewritten to poll the tick endpoint every 5s instead of a fake client-side timer, plus a 'Leave' button. Verified end-to-end in browser, including forcing overage/grace/hard-stop by backdating started_at and grace_started_at in the DB: overage billed correctly (4 min over -> 8 credits), grace period triggered exactly at balance <= 0 with an accurate countdown, hard stop fired after the grace window ended (booking flipped to 'completed'), and a booking attempt with a negative balance was correctly rejected with 402. Also confirmed the background poll and manual test calls overlapping never double-charged, validating the row-lock + ledger-derived 'already billed' design." },
+    { "date": "2026-07-01", "change": "Added booking cancellation with tiered refunds per session_rules.md: cancelBooking() in src/lib/bookings.ts, POST /api/bookings/[id]/cancel, and a Cancel button in BookingActions (shown only for not-yet-joined bookings). Refactored BookingNotFoundError/ForbiddenError to live in bookings.ts as the single source, re-exported from sessions.ts (previously duplicated). Verified all three refund tiers end-to-end (50% default, 100% when cancelled >24h ahead, 0% no-show) plus the 409 block on cancelling an already-active session -- balance and the dashboard list updated correctly after each." },
+    { "date": "2026-07-01", "change": "Added real Google sign-in/sign-up (user provided a Google Cloud OAuth Client ID/Secret, added to .env.local, gitignored). Re-added GoogleProvider to src/lib/auth.ts with real credentials; made users.password_hash nullable (schema.sql + live DB migration) since Google accounts don't set one; added findOrCreateOAuthUser() to src/lib/users.ts (atomic ON CONFLICT upsert) so a Google sign-in links to an existing password-based account by email instead of creating a duplicate, without touching that account's password; verifyUser() now guards against a NULL password_hash. Added a shared GoogleIcon component and 'Continue with Google' buttons to both /user/login and /user/signup. Verified: the button correctly redirects to accounts.google.com with the right client_id/redirect_uri/PKCE; the account-linking upsert logic verified directly against the DB (new user created, repeat sign-in reuses the same row, linking to an existing password account preserves that password). The full interactive Google consent round-trip needs a real Google login and wasn't completed by an automated test -- that's on the user to click through themselves." }
+  ]
+}
