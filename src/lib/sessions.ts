@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
-import { withTransaction } from './db';
-import { GRACE_PERIOD_MS, LOW_BALANCE_WARNING_CREDITS, OVERAGE_RATE_PER_MINUTE, type SessionState } from './sessionRules';
+import { withTransaction, pool } from './db';
+import { GRACE_PERIOD_MS, LOW_BALANCE_WARNING_CREDITS, OVERAGE_RATE_PER_MINUTE, JOIN_WINDOW_BEFORE_MS, type SessionState } from './sessionRules';
 import { BookingNotFoundError, ForbiddenError } from './bookings';
 
 export { BookingNotFoundError, ForbiddenError };
@@ -19,15 +19,29 @@ export class BookingNotJoinableError extends Error {
   }
 }
 
-export async function joinSession(userId: string, bookingId: string): Promise<{ sessionId: string }> {
+export class SessionNotStartedError extends Error {
+  constructor() {
+    super("The client hasn't started this session yet.");
+    this.name = 'SessionNotStartedError';
+  }
+}
+
+export class TooEarlyToJoinError extends Error {
+  constructor() {
+    super("This session isn't ready to join yet -- you can join starting 10 minutes before the scheduled time.");
+    this.name = 'TooEarlyToJoinError';
+  }
+}
+
+export async function joinSession(callerId: string, bookingId: string): Promise<{ sessionId: string }> {
   return withTransaction(async (client) => {
     const bookingResult = await client.query(`SELECT * FROM bookings WHERE id = $1 FOR UPDATE`, [bookingId]);
     const booking = bookingResult.rows[0];
     if (!booking) throw new BookingNotFoundError();
-    if (booking.user_id !== userId) throw new ForbiddenError();
-    if (booking.status === 'completed' || booking.status === 'cancelled') {
-      throw new BookingNotJoinableError();
-    }
+
+    const isClient = booking.user_id === callerId;
+    const isAssignedExpert = booking.expert_id === callerId;
+    if (!isClient && !isAssignedExpert) throw new ForbiddenError();
 
     const existingResult = await client.query(
       `SELECT * FROM chat_sessions WHERE booking_id = $1 AND status != 'ended' ORDER BY created_at DESC LIMIT 1`,
@@ -35,12 +49,27 @@ export async function joinSession(userId: string, bookingId: string): Promise<{ 
     );
     let session = existingResult.rows[0];
 
+    if (isAssignedExpert) {
+      // The expert can only view a session the client has already started --
+      // never create one (that would make the expert the billed party).
+      if (!session) throw new SessionNotStartedError();
+      return { sessionId: session.id };
+    }
+
+    if (booking.status === 'completed' || booking.status === 'cancelled') {
+      throw new BookingNotJoinableError();
+    }
+
     if (!session) {
+      if (new Date(booking.starts_at).getTime() - Date.now() > JOIN_WINDOW_BEFORE_MS) {
+        throw new TooEarlyToJoinError();
+      }
+
       const insertResult = await client.query(
         `INSERT INTO chat_sessions (booking_id, user_id, started_at, status)
          VALUES ($1, $2, NOW(), 'active')
          RETURNING *`,
-        [bookingId, userId]
+        [bookingId, callerId]
       );
       session = insertResult.rows[0];
       await client.query(`UPDATE bookings SET status = 'active' WHERE id = $1`, [bookingId]);
@@ -48,6 +77,24 @@ export async function joinSession(userId: string, bookingId: string): Promise<{ 
 
     return { sessionId: session.id };
   });
+}
+
+export type SessionAccess = { session: { id: string; user_id: string }; booking: { expert_id: string | null } };
+
+// Read-only authorization check shared by chat (messages.ts) and the Pusher
+// channel-auth endpoint -- same client-or-assigned-expert rule as tickSession,
+// but without the row lock since nothing here is mutated.
+export async function assertSessionAccess(callerId: string, sessionId: string): Promise<SessionAccess> {
+  const sessionResult = await pool.query(`SELECT id, user_id, booking_id FROM chat_sessions WHERE id = $1`, [sessionId]);
+  const session = sessionResult.rows[0];
+  if (!session) throw new SessionNotFoundError();
+
+  const bookingResult = await pool.query(`SELECT expert_id FROM bookings WHERE id = $1`, [session.booking_id]);
+  const booking = bookingResult.rows[0];
+
+  if (callerId !== session.user_id && callerId !== booking?.expert_id) throw new ForbiddenError();
+
+  return { session, booking };
 }
 
 async function getBalance(client: PoolClient, userId: string): Promise<number> {
@@ -58,17 +105,22 @@ async function getBalance(client: PoolClient, userId: string): Promise<number> {
   return Number(result.rows[0].balance);
 }
 
-export async function tickSession(userId: string, sessionId: string): Promise<SessionState> {
+export async function tickSession(callerId: string, sessionId: string): Promise<SessionState> {
   return withTransaction(async (client) => {
     const sessionResult = await client.query(`SELECT * FROM chat_sessions WHERE id = $1 FOR UPDATE`, [sessionId]);
     const session = sessionResult.rows[0];
     if (!session) throw new SessionNotFoundError();
-    if (session.user_id !== userId) throw new ForbiddenError();
 
-    const bookingResult = await client.query(`SELECT included_minutes FROM bookings WHERE id = $1`, [
+    const bookingResult = await client.query(`SELECT included_minutes, expert_id FROM bookings WHERE id = $1`, [
       session.booking_id,
     ]);
-    const includedMinutes = bookingResult.rows[0].included_minutes as number;
+    const booking = bookingResult.rows[0];
+    const includedMinutes = booking.included_minutes as number;
+
+    // The session's own user_id is always the paying client -- billing must
+    // never be applied against whoever happens to be viewing (e.g. the expert).
+    const payerId: string = session.user_id;
+    if (callerId !== payerId && callerId !== booking.expert_id) throw new ForbiddenError();
 
     const now = new Date();
     const startedAt = new Date(session.started_at);
@@ -76,7 +128,7 @@ export async function tickSession(userId: string, sessionId: string): Promise<Se
     const elapsedMinutes = Math.floor(elapsedMs / 60000);
 
     if (session.status === 'ended') {
-      const balance = await getBalance(client, userId);
+      const balance = await getBalance(client, payerId);
       return buildState(session, includedMinutes, elapsedMinutes, balance, null);
     }
 
@@ -87,7 +139,7 @@ export async function tickSession(userId: string, sessionId: string): Promise<Se
     let graceStartedAt: Date | null = session.grace_started_at ? new Date(session.grace_started_at) : null;
 
     if (status === 'grace') {
-      const balance = await getBalance(client, userId);
+      const balance = await getBalance(client, payerId);
       if (balance > 0) {
         status = 'active';
         graceStartedAt = null;
@@ -111,10 +163,10 @@ export async function tickSession(userId: string, sessionId: string): Promise<Se
         await client.query(
           `INSERT INTO ledger_entries (user_id, amount, entry_type, reference_id, description)
            VALUES ($1, $2, 'overage_charge', $3, $4)`,
-          [userId, -creditsToCharge, session.id, `Overage: ${minutesToCharge} minute(s) over included time`]
+          [payerId, -creditsToCharge, session.id, `Overage: ${minutesToCharge} minute(s) over included time`]
         );
 
-        const balanceAfterCharge = await getBalance(client, userId);
+        const balanceAfterCharge = await getBalance(client, payerId);
         if (balanceAfterCharge <= 0) {
           status = 'grace';
           graceStartedAt = now;
@@ -135,17 +187,21 @@ export async function tickSession(userId: string, sessionId: string): Promise<Se
       );
     }
 
-    const balance = await getBalance(client, userId);
+    const balance = await getBalance(client, payerId);
     return buildState({ ...session, status }, includedMinutes, elapsedMinutes, balance, graceStartedAt, now, overageMinutesStarted);
   });
 }
 
-export async function endSession(userId: string, sessionId: string): Promise<void> {
+export async function endSession(callerId: string, sessionId: string): Promise<void> {
   await withTransaction(async (client) => {
     const sessionResult = await client.query(`SELECT * FROM chat_sessions WHERE id = $1 FOR UPDATE`, [sessionId]);
     const session = sessionResult.rows[0];
     if (!session) throw new SessionNotFoundError();
-    if (session.user_id !== userId) throw new ForbiddenError();
+
+    const bookingResult = await client.query(`SELECT expert_id FROM bookings WHERE id = $1`, [session.booking_id]);
+    const booking = bookingResult.rows[0];
+    if (callerId !== session.user_id && callerId !== booking?.expert_id) throw new ForbiddenError();
+
     if (session.status === 'ended') return;
 
     await client.query(`UPDATE chat_sessions SET status = 'ended', ended_at = NOW() WHERE id = $1`, [sessionId]);

@@ -23,6 +23,7 @@ function Header() {
         <Link href="/">Home</Link>
         <Link href="/pricing">Pricing</Link>
         {session.data && <Link href="/app/dashboard">Dashboard</Link>}
+        {session.data?.user?.role === 'expert' && <Link href="/app/admin">Admin</Link>}
       </nav>
 
       <div className={styles['auth-actions']}>

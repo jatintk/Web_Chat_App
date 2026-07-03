@@ -3,28 +3,33 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SessionState } from '@/lib/sessionRules';
+import { getPusherClient } from '@/lib/pusherClient';
 
-interface Message {
+interface ChatMessage {
   id: string;
-  text: string;
-  sender: 'user' | 'expert' | 'system';
-  timestamp: string;
+  sessionId: string;
+  senderId: string;
+  senderName: string | null;
+  senderRole: 'user' | 'expert';
+  body: string;
+  createdAt: string;
 }
 
 interface ChatWindowProps {
   sessionId: string;
   initialState: SessionState;
+  initialMessages: ChatMessage[];
+  viewerId: string;
 }
 
 const TICK_INTERVAL_MS = 5000;
 
-export default function ChatWindow({ sessionId, initialState }: ChatWindowProps) {
+export default function ChatWindow({ sessionId, initialState, initialMessages, viewerId }: ChatWindowProps) {
   const router = useRouter();
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: "Session started. You are now connected with the expert.", sender: 'system', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-    { id: '2', text: "Hi there! How can I help you today?", sender: 'expert', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [inputText, setInputText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [state, setState] = useState<SessionState>(initialState);
   const [leaving, setLeaving] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -32,6 +37,23 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Real-time messaging: subscribe to this session's private Pusher channel.
+  // The server broadcasts every message (including the sender's own) after
+  // persisting it, so we dedupe by id rather than appending optimistically.
+  useEffect(() => {
+    const pusher = getPusherClient();
+    const channel = pusher.subscribe(`private-session-${sessionId}`);
+
+    channel.bind('new-message', (message: ChatMessage) => {
+      setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    });
+
+    return () => {
+      channel.unbind('new-message');
+      pusher.unsubscribe(`private-session-${sessionId}`);
+    };
+  }, [sessionId]);
 
   // Server-authoritative billing: poll the tick endpoint so overage/grace/hard-stop
   // are driven by wall-clock time on the server, not a client-side interval.
@@ -48,29 +70,29 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
     return () => clearInterval(timer);
   }, [sessionId, state.status]);
 
-  const handleSend = (e: React.FormEvent) => {
+  async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!inputText.trim() || state.status === 'ended') return;
+    const text = inputText.trim();
+    if (!text || state.status === 'ended' || sending) return;
 
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      text: inputText,
-      sender: "user",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }]);
-
-    setInputText('');
-
-    // Mock expert reply
-    setTimeout(() => {
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        text: "That's an interesting point. Let me analyze that for you.",
-        sender: "expert",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }]);
-    }, 2000);
-  };
+    setSending(true);
+    setSendError(null);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setSendError(data?.error || 'Could not send message.');
+        return;
+      }
+      setInputText('');
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function handleLeave() {
     setLeaving(true);
@@ -103,6 +125,9 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <a href={`/api/sessions/${sessionId}/export`} className="btn-ghost">
+            Export Chat
+          </a>
           <div className={`credit-display ${isWarning ? 'warning' : ''} ${isDanger ? 'danger' : ''}`}>
             <span className="credit-icon">💎</span>
             <span className="credit-value">{state.balance}</span>
@@ -118,18 +143,21 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
 
       {/* Messages Area */}
       <div className="messages-container">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`message-wrapper ${msg.sender}`}>
-            {msg.sender === 'system' ? (
-              <div className="system-message">{msg.text}</div>
-            ) : (
-              <div className={`message-bubble ${msg.sender}`}>
-                <div className="message-text">{msg.text}</div>
-                <div className="message-time">{msg.timestamp}</div>
+        {messages.length === 0 && <div className="system-message">Say hello to get started.</div>}
+        {messages.map((msg) => {
+          const isOwn = msg.senderId === viewerId;
+          const bubbleClass = isOwn ? 'user' : 'expert';
+          return (
+            <div key={msg.id} className={`message-wrapper ${bubbleClass}`}>
+              <div className={`message-bubble ${bubbleClass}`}>
+                <div className="message-text">{msg.body}</div>
+                <div className="message-time">
+                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
               </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
@@ -137,6 +165,7 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
       <div className="input-container">
         {state.status !== 'ended' ? (
           <form onSubmit={handleSend} className="input-form">
+            {sendError && <p style={{ color: '#ef4444', margin: '0 0 0.5rem', fontSize: '0.85rem' }}>{sendError}</p>}
             <input
               type="text"
               value={inputText}
@@ -144,8 +173,9 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
               placeholder="Type your message..."
               className="chat-input"
               autoComplete="off"
+              disabled={sending}
             />
-            <button type="submit" className="send-btn hover-lift" disabled={!inputText.trim()}>
+            <button type="submit" className="send-btn hover-lift" disabled={!inputText.trim() || sending}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -289,6 +319,7 @@ export default function ChatWindow({ sessionId, initialState }: ChatWindowProps)
           border-radius: 20px;
           font-size: 0.85rem;
           color: var(--text-secondary);
+          align-self: center;
         }
 
         .message-bubble {
