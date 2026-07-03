@@ -16,12 +16,20 @@ export type UserProfile = {
   dateOfBirth: string | null;
   timeOfBirth: string | null;
   placeOfBirth: string | null;
+  hasPassword: boolean;
 };
 
 export class EmailInUseError extends Error {
   constructor() {
     super('Email is already registered');
     this.name = 'EmailInUseError';
+  }
+}
+
+export class InvalidCurrentPasswordError extends Error {
+  constructor() {
+    super('Current password is incorrect.');
+    this.name = 'InvalidCurrentPasswordError';
   }
 }
 
@@ -94,6 +102,7 @@ function rowToProfile(row: {
   date_of_birth: string | Date | null;
   time_of_birth: string | null;
   place_of_birth: string | null;
+  has_password: boolean;
 }): UserProfile {
   // node-postgres parses a DATE column into a JS Date at LOCAL midnight (not
   // a string) by default -- normalize to YYYY-MM-DD using local getters, not
@@ -110,12 +119,14 @@ function rowToProfile(row: {
     dateOfBirth,
     timeOfBirth: row.time_of_birth,
     placeOfBirth: row.place_of_birth,
+    hasPassword: row.has_password,
   };
 }
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
   const result = await pool.query(
-    `SELECT id, name, date_of_birth, time_of_birth, place_of_birth FROM users WHERE id = $1`,
+    `SELECT id, name, date_of_birth, time_of_birth, place_of_birth, (password_hash IS NOT NULL) AS has_password
+     FROM users WHERE id = $1`,
     [userId]
   );
   return result.rows[0] ? rowToProfile(result.rows[0]) : null;
@@ -132,7 +143,7 @@ export async function updateUserProfile(
     `UPDATE users
      SET name = $2, date_of_birth = $3, time_of_birth = $4, place_of_birth = $5
      WHERE id = $1
-     RETURNING id, name, date_of_birth, time_of_birth, place_of_birth`,
+     RETURNING id, name, date_of_birth, time_of_birth, place_of_birth, (password_hash IS NOT NULL) AS has_password`,
     [userId, params.name, params.dateOfBirth, params.timeOfBirth, params.placeOfBirth]
   );
   return result.rows[0] ? rowToProfile(result.rows[0]) : null;
@@ -142,4 +153,24 @@ export async function updateUserProfile(
 export async function getUserContact(userId: string): Promise<{ email: string; name: string | null } | null> {
   const result = await pool.query(`SELECT email, name FROM users WHERE id = $1`, [userId]);
   return result.rows[0] ?? null;
+}
+
+// If the user already has a password, currentPassword must match it. If
+// password_hash is NULL (a Google-only account), this is a legitimate
+// first-time "set a password" path instead -- no current-password check.
+export async function changePassword(
+  userId: string,
+  params: { currentPassword?: string; newPassword: string }
+): Promise<void> {
+  const result = await pool.query(`SELECT password_hash FROM users WHERE id = $1`, [userId]);
+  const row = result.rows[0];
+  if (!row) throw new Error('User not found.');
+
+  if (row.password_hash) {
+    const matches = params.currentPassword ? await bcrypt.compare(params.currentPassword, row.password_hash) : false;
+    if (!matches) throw new InvalidCurrentPasswordError();
+  }
+
+  const passwordHash = await bcrypt.hash(params.newPassword, 10);
+  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, userId]);
 }
