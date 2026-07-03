@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { joinSession, BookingNotFoundError, ForbiddenError, BookingNotJoinableError } from '@/lib/sessions';
+import { joinSession, BookingNotFoundError, ForbiddenError, BookingNotJoinableError, SessionNotStartedError, TooEarlyToJoinError } from '@/lib/sessions';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -26,6 +26,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: 403 });
     }
     if (err instanceof BookingNotJoinableError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
+    if (err instanceof SessionNotStartedError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
+    if (err instanceof TooEarlyToJoinError) {
       return NextResponse.json({ error: err.message }, { status: 409 });
     }
     console.error('Session join failed:', err);

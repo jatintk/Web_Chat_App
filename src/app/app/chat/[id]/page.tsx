@@ -4,6 +4,7 @@ import { redirect, notFound } from 'next/navigation';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { tickSession, SessionNotFoundError, ForbiddenError } from '@/lib/sessions';
+import { listMessages } from '@/lib/messages';
 import ChatWindow from '@/components/islands/ChatWindow';
 import styles from './page.module.css';
 
@@ -27,8 +28,10 @@ export default async function ChatPage({ params }: Props) {
   }
 
   let initialState;
+  let initialMessages;
   try {
     initialState = await tickSession(session.user.id, id);
+    initialMessages = await listMessages(session.user.id, id);
   } catch (err) {
     if (err instanceof SessionNotFoundError || err instanceof ForbiddenError) {
       notFound();
@@ -50,7 +53,12 @@ export default async function ChatPage({ params }: Props) {
         <p className={styles.subtitle}>Your secure, realtime session is active. Messages are strictly confidential.</p>
       </div>
 
-      <ChatWindow sessionId={id} initialState={initialState} />
+      <ChatWindow
+        sessionId={id}
+        initialState={initialState}
+        initialMessages={initialMessages}
+        viewerId={session.user.id}
+      />
     </div>
   );
 }

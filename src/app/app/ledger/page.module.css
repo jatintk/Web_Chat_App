@@ -1,0 +1,76 @@
+.ledger-container {
+  padding: 2rem 0;
+}
+
+.ledger-header {
+  margin-bottom: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.ledger-header h1 {
+  font-size: 2rem;
+  margin-bottom: 0.25rem;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.entry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: rgba(255, 251, 245, 0.7);
+  border-radius: 12px;
+  border: 1px solid var(--surface-border);
+}
+
+.entry-info h4 {
+  font-size: 0.95rem;
+  margin-bottom: 0.2rem;
+  text-transform: capitalize;
+}
+
+.entry-info p {
+  font-size: 0.8rem;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.entry-amount {
+  font-size: 1.1rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.entry-amount.positive {
+  color: #16a34a;
+}
+
+.entry-amount.negative {
+  color: #ef4444;
+}
+
+.empty-state {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+}

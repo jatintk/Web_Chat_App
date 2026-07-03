@@ -1,10 +1,13 @@
 import bcrypt from 'bcryptjs';
 import { pool } from './db';
 
+export type UserRole = 'user' | 'expert';
+
 export type PublicUser = {
   id: string;
   email: string;
   name: string | null;
+  role: UserRole;
 };
 
 export class EmailInUseError extends Error {
@@ -26,7 +29,7 @@ export async function createUser(params: {
     const result = await pool.query(
       `INSERT INTO users (email, name, password_hash)
        VALUES ($1, $2, $3)
-       RETURNING id, email, name`,
+       RETURNING id, email, name, role`,
       [email, params.name ?? null, passwordHash]
     );
     return result.rows[0];
@@ -45,7 +48,7 @@ export async function verifyUser(params: {
   const email = params.email.trim().toLowerCase();
 
   const result = await pool.query(
-    `SELECT id, email, name, password_hash FROM users WHERE email = $1`,
+    `SELECT id, email, name, password_hash, role FROM users WHERE email = $1`,
     [email]
   );
   const row = result.rows[0];
@@ -54,7 +57,7 @@ export async function verifyUser(params: {
   const passwordMatches = await bcrypt.compare(params.password, row.password_hash);
   if (!passwordMatches) return null;
 
-  return { id: row.id, email: row.email, name: row.name };
+  return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 
 export async function findOrCreateOAuthUser(params: {
@@ -71,7 +74,7 @@ export async function findOrCreateOAuthUser(params: {
     `INSERT INTO users (email, name, password_hash)
      VALUES ($1, $2, NULL)
      ON CONFLICT (email) DO UPDATE SET name = COALESCE(users.name, EXCLUDED.name)
-     RETURNING id, email, name`,
+     RETURNING id, email, name, role`,
     [email, params.name ?? null]
   );
   return result.rows[0];

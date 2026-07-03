@@ -1,9 +1,9 @@
 {
   "meta": {
     "projectName": "AstroChat (Chat_App)",
-    "lastUpdated": "2026-07-01",
-    "stack": ["Next.js 15 (App Router)", "React 19", "TypeScript", "NextAuth v4", "PostgreSQL (Neon, connected via node-postgres)", "bcryptjs"],
-    "summary": "Credit-based chat app: users buy credit packs, book time slots, and chat with a server-authoritative timer that bills overage per minute. Auth, credit balance, slot booking, and the full session billing loop (overage charges, low-balance warning, grace period, hard stop) are live end-to-end against Postgres. Only the credit *purchase* loop (Razorpay) and real-time messaging are still mocked or design-only.",
+    "lastUpdated": "2026-07-03",
+    "stack": ["Next.js 15 (App Router)", "React 19", "TypeScript", "NextAuth v4", "PostgreSQL (Neon, connected via node-postgres)", "bcryptjs", "Pusher Channels (realtime)"],
+    "summary": "Credit-based chat app: users buy credit packs, book a real future time slot from the expert's calendar, and chat with a server-authoritative timer that bills overage per minute. Auth (incl. Google), credit balance, ledger history, real calendar-based booking with cancel/reschedule, the full session billing loop, a basic expert role with an admin page (manage availability + all bookings), and real-time persisted chat messaging (Pusher, with .txt export) are all live end-to-end against Postgres. Only the credit *purchase* loop (Razorpay) is still mocked/design-only.",
     "note": "This file is hand-updated after each meaningful change. See PROJECT_TRACKER.md for narrative notes."
   },
   "pages": [
@@ -44,16 +44,31 @@
       "file": "src/app/app/dashboard/page.tsx",
       "title": "Dashboard",
       "status": "partial-live",
-      "description": "Server component: redirects to /user/login if unauthenticated, greets the real user, shows the real credit balance, and lists real upcoming bookings via listUpcomingBookings() (BookingActions island handles booking + joining). Quick Actions (Find Expert / Ledger History / Settings) are still dead buttons.",
-      "usesComponents": ["Header", "BookingActions"]
+      "description": "Server component: redirects to /user/login if unauthenticated, then branches on session.user.role. Clients see the greeting, real credit balance, real upcoming bookings and a list of the expert's real open calendar slots to book (BookingActions island), and Quick Actions (Ledger History links to /app/ledger; 'Find Expert' is still a dead button since there's no real marketplace/matching; 'Settings' was removed). Experts (role='expert') see a completely different view: a 'Client Sessions' panel (ExpertSessions island) for joining active sessions, plus a link to /app/admin for calendar/bookings management.",
+      "usesComponents": ["Header", "BookingActions", "ExpertSessions"]
     },
     {
       "route": "/app/chat/[id]",
       "file": "src/app/app/chat/[id]/page.tsx",
       "title": "Active Chat Session",
-      "status": "partial-live",
-      "description": "Server component: redirects to /user/login if unauthenticated, calls tickSession() once server-side (id is now a real chat_sessions UUID) to get authoritative initial state, 404s via notFound() if the session doesn't exist or isn't the caller's. Session billing (overage/grace/hard-stop) is fully real; the chat messages themselves are still a client-side mock with a canned auto-reply.",
+      "status": "live",
+      "description": "Server component: redirects to /user/login if unauthenticated, calls tickSession() and listMessages() server-side (id is a real chat_sessions UUID) for authoritative initial billing state + message history, 404s via notFound() if the session doesn't exist or the caller is neither the paying client nor the assigned expert. Session billing is fully real and always reflects the client's wallet regardless of which participant is viewing. Chat messages are now real too: persisted to Postgres and delivered live over a private Pusher channel to both participants.",
       "usesComponents": ["Header", "ChatWindow"]
+    },
+    {
+      "route": "/app/ledger",
+      "file": "src/app/app/ledger/page.tsx",
+      "title": "Ledger History",
+      "status": "live",
+      "description": "Server component, auth-guarded. Lists the signed-in user's ledger_entries (purchase/slot_booking/overage_charge/refund) newest-first via listLedgerEntries(), with a human label per entry_type, the description, timestamp, and the signed amount (green for credits added, red for credits spent). Linked from the dashboard's 'Ledger History' quick action."
+    },
+    {
+      "route": "/app/admin",
+      "file": "src/app/app/admin/page.tsx",
+      "title": "Admin",
+      "status": "live",
+      "description": "Server component: redirects to /user/login if unauthenticated, redirects to /app/dashboard if role !== 'expert' (reuses the expert role as admin rights -- no separate admin role exists). Two panels: Availability (AvailabilityManager island -- create a new calendar slot, view/cancel existing ones) and All Bookings (AdminBookingsList island -- every booking ever assigned to this expert regardless of status, with cancel-always-100%-refund and reschedule-with-no-lead-time-restriction actions). Linked from the expert's dashboard and from Header's conditional 'Admin' nav link.",
+      "usesComponents": ["Header", "AvailabilityManager", "AdminBookingsList"]
     }
   ],
   "components": [
@@ -66,14 +81,32 @@
     {
       "name": "ChatWindow",
       "file": "src/components/islands/ChatWindow.tsx",
-      "status": "partial-live",
-      "description": "Billing is now real: polls POST /api/sessions/[id]/tick every 5s and renders the server's authoritative status (active/grace/ended), balance, and grace countdown; 'Leave' button calls the end endpoint. The chat messages themselves are still a local-only mock (canned expert auto-reply, nothing persisted or sent to another party)."
+      "status": "live",
+      "description": "Billing polls POST /api/sessions/[id]/tick every 5s and renders the server's authoritative status (active/grace/ended), balance, and grace countdown; 'Leave' button calls the end endpoint. Messaging is now real: starts from server-fetched initialMessages, subscribes to the session's private Pusher channel (getPusherClient()) and appends incoming 'new-message' events (deduped by id -- no optimistic local append, so a message only appears once it's round-tripped through Pusher, which is also what proved the realtime wiring works in testing). Own vs. other messages are distinguished by comparing senderId to the viewerId prop (passed from the server, since Header's SessionProvider doesn't wrap the whole app) rather than a fixed role. 'Export Chat' is a plain link to the export endpoint (no JS needed -- the browser handles the download via the Content-Disposition header)."
     },
     {
       "name": "BookingActions",
       "file": "src/components/islands/BookingActions.tsx",
       "status": "live",
-      "description": "Client island rendered on the dashboard. Lists existing upcoming bookings with a Join button (POST /api/sessions/join then navigates to /app/chat/[sessionId]) and, for not-yet-joined ('scheduled') bookings, a Cancel button (POST /api/bookings/[id]/cancel, shows the refund result inline, then router.refresh()s the dashboard). Plus 'Book Standard' / 'Book Extended' buttons (POST /api/bookings then auto-joins). Shows inline errors (e.g. insufficient credits)."
+      "description": "Client island rendered on the client's dashboard. Lists existing upcoming bookings (each showing the assigned expert's name) with: a Join button that's disabled until within 10 minutes of the booking's real scheduled starts_at (client-side display gate, recomputed every 30s; the server enforces the real check via TooEarlyToJoinError); a Cancel button for 'scheduled' bookings (POST /api/bookings/[id]/cancel, tiered refund shown inline); and a Reschedule action shown only when the booking is more than 3 days out (inline <select> of the expert's other open same-type slots, POST /api/bookings/[id]/reschedule). The 'book a slot' section lists the expert's real open availability_slots (date/time/type/price) instead of generic type buttons -- booking no longer auto-joins, since the slot may be scheduled well in the future (a real bug caught and fixed during this feature's verification pass)."
+    },
+    {
+      "name": "ExpertSessions",
+      "file": "src/components/islands/ExpertSessions.tsx",
+      "status": "live",
+      "description": "Client island rendered on the expert's dashboard (role='expert'). Lists bookings assigned to the expert (client name/email, slot length, time). Shows a 'Join Session' button only once the client has actually started the session (booking status 'active' -- a chat_sessions row exists); otherwise shows 'Waiting for client'. Joining calls the same POST /api/sessions/join used by clients, which for an expert caller only ever attaches to an existing session, never creates/bills one. Unaffected by the calendar/availability feature -- still shows only scheduled/active bookings, day-to-day join flow only."
+    },
+    {
+      "name": "AvailabilityManager",
+      "file": "src/components/islands/AvailabilityManager.tsx",
+      "status": "live",
+      "description": "Client island on /app/admin. A create form (slot-type dropdown + datetime-local input, converted to an ISO string client-side to avoid timezone ambiguity) posts to POST /api/admin/availability-slots. Lists all of the expert's slots (open/booked/cancelled, dimmed when not open) with a Cancel action for open ones only (POST /api/admin/availability-slots/[id]/cancel) -- a booked slot can't be pulled directly here, only via cancelling/rescheduling the booking that claimed it."
+    },
+    {
+      "name": "AdminBookingsList",
+      "file": "src/components/islands/AdminBookingsList.tsx",
+      "status": "live",
+      "description": "Client island on /app/admin. Every booking ever assigned to the expert, any status, with a status badge. For 'scheduled' bookings: Cancel (always shows a 100% refund result, since this path is always expert-initiated) and Reschedule (same same-type-slot picker pattern as BookingActions, but with no 3-day lead-time restriction -- the expert can reschedule however soon the session is)."
     },
     {
       "name": "db (pool + withTransaction)",
@@ -85,7 +118,7 @@
       "name": "users lib",
       "file": "src/lib/users.ts",
       "status": "live",
-      "description": "createUser() and verifyUser() against the real users table. Passwords hashed with bcryptjs (10 rounds); duplicate email throws EmailInUseError (mapped to Postgres unique-violation code 23505). verifyUser() returns null if password_hash is NULL (Google-only accounts can't log in via Credentials). findOrCreateOAuthUser(email, name): atomic upsert (INSERT ... ON CONFLICT (email) DO UPDATE) used by the Google provider -- links to an existing account by email without overwriting its password_hash, or creates a new password-less row."
+      "description": "createUser() and verifyUser() against the real users table. Passwords hashed with bcryptjs (10 rounds); duplicate email throws EmailInUseError (mapped to Postgres unique-violation code 23505). verifyUser() returns null if password_hash is NULL (Google-only accounts can't log in via Credentials). findOrCreateOAuthUser(email, name): atomic upsert (INSERT ... ON CONFLICT (email) DO UPDATE) used by the Google provider -- links to an existing account by email without overwriting its password_hash, or creates a new password-less row. PublicUser now includes role ('user' | 'expert', default 'user'), propagated through NextAuth into session.user.role."
     },
     {
       "name": "GoogleIcon",
@@ -97,7 +130,7 @@
       "name": "ledger lib",
       "file": "src/lib/ledger.ts",
       "status": "live",
-      "description": "getBalance(userId) -> SUM(amount) over ledger_entries, coalesced to 0. Read-only; ledger_entries is now written by bookings.ts (slot_booking) and sessions.ts (overage_charge) in addition to manual/test inserts."
+      "description": "getBalance(userId) -> SUM(amount) over ledger_entries, coalesced to 0. listLedgerEntries(userId) -> full history newest-first, powers /app/ledger. Read-only; ledger_entries is written by bookings.ts (slot_booking, refund) and sessions.ts (overage_charge) in addition to manual/test inserts."
     },
     {
       "name": "authOptions",
@@ -109,19 +142,43 @@
       "name": "sessionRules",
       "file": "src/lib/sessionRules.ts",
       "status": "live",
-      "description": "Constants matching session_rules.md: SLOT_TYPES (standard: 50cr/30min, extended: 90cr/60min), OVERAGE_RATE_PER_MINUTE (2), LOW_BALANCE_WARNING_CREDITS (4), GRACE_PERIOD_MS (2min). Also the shared SessionState type used by both the server lib and the client ChatWindow."
+      "description": "Constants matching session_rules.md: SLOT_TYPES (standard: 50cr/30min, extended: 90cr/60min -- deliberately kept hardcoded, dynamic per-tier pricing was scoped out of the calendar/availability feature), OVERAGE_RATE_PER_MINUTE (2), LOW_BALANCE_WARNING_CREDITS (4), GRACE_PERIOD_MS (2min), CANCELLATION_FULL_REFUND_WINDOW_MS/CANCELLATION_PARTIAL_REFUND_PERCENT (client-initiated cancellation tiers only), JOIN_WINDOW_BEFORE_MS (10min -- how early a client can join a scheduled session), RESCHEDULE_MIN_LEAD_TIME_MS (3 days -- client-initiated reschedule lead time; the expert is exempt). Also the shared SessionState type used by both the server lib and the client ChatWindow."
+    },
+    {
+      "name": "availability lib",
+      "file": "src/lib/availability.ts",
+      "status": "live",
+      "description": "The expert's calendar. createAvailabilitySlot(expertId, {slotType, startsAt}): validates startsAt is in the future, rejects overlapping slots for that expert, inserts status='open'. listOpenSlots(): all open future slots across the (one) expert, feeds the client's 'book a slot' list. listAllSlotsForExpert(expertId): every status, for the admin calendar view. cancelAvailabilitySlot(expertId, slotId): only for a still-'open' slot (a booked one must be freed via cancelling/rescheduling its booking instead). Shares SlotNotFoundError/SlotNotAvailableError/SlotOverlapError/ForbiddenError with bookings.ts (single source there, re-exported here) to avoid a circular import between the two modules."
     },
     {
       "name": "bookings lib",
       "file": "src/lib/bookings.ts",
       "status": "live",
-      "description": "createBooking(userId, slotType): per-user Postgres advisory lock (pg_advisory_xact_lock) + transaction, checks balance, inserts the booking row and a slot_booking ledger debit atomically. Throws InsufficientCreditsError if balance < cost. listUpcomingBookings(userId) returns scheduled/active bookings. cancelBooking(userId, bookingId): tiered refund per session_rules.md (100% if cancelled >24h before starts_at, 50% otherwise, 0% if the booking's window already elapsed unjoined); refund amount is derived from the original slot_booking ledger charge, not a stored price. Blocks cancelling an 'active' (already-joined) or already-finished booking."
+      "description": "createBooking(userId, availabilitySlotId): per-user advisory lock + transaction, locks and validates the target availability_slots row (must be 'open' and in the future -- SlotNotAvailableError otherwise, which is what makes an admin-deactivates-while-a-client-has-it-loaded race resolve cleanly), checks balance against the (still-hardcoded) SLOT_TYPES cost for that slot's type, marks the slot 'booked', and inserts the booking (snapshotting starts_at/ends_at/included_minutes/slot_type/availability_slot_id) + a slot_booking ledger debit atomically. listUpcomingBookings/listAssignedBookings unchanged in shape (now also carry slot_type/availability_slot_id via SELECT b.*). New listAllAssignedBookings(expertId): every status, for the admin page. cancelBooking(callerId, bookingId): authorizes the client OR the assigned expert; refund policy now branches on *who* -- expert-initiated is always 100% regardless of timing (business-initiated, not the client's fault), client-initiated keeps the original tiered policy (100%/50%/0%); the refund ledger entry always credits booking.user_id, never callerId (the critical fix once the expert can also cancel); releases the tied availability_slots row back to 'open' if its window hasn't passed. New rescheduleBooking(callerId, bookingId, newAvailabilitySlotId): same dual authorization; only for 'scheduled' bookings; client-initiated reschedules require the CURRENT booking to be more than 3 days out (RescheduleWindowExpiredError otherwise), the expert is exempt; the new slot must be 'open', in the future, and the SAME slot_type (no cross-type reschedule -- would mean a price/duration delta, deliberately out of scope); releases the old slot, claims the new one, updates the booking's time fields; no ledger entries at all (pure time change, cost never changes)."
     },
     {
       "name": "sessions lib",
       "file": "src/lib/sessions.ts",
       "status": "live",
-      "description": "The core billing engine. joinSession() creates (or resumes) a chat_sessions row for a booking. tickSession() is the server-authoritative heart: locks the session row (SELECT ... FOR UPDATE), computes elapsed/overage minutes from wall-clock time vs started_at, charges only the incremental overage minutes not yet reflected in ledger_entries (so concurrent/overlapping calls can't double-charge), transitions active -> grace when balance hits <=0, and grace -> ended if 2 minutes pass without a top-up (or back to active if balance goes positive again). endSession() lets a user manually leave early."
+      "description": "The core billing engine, dual-access. joinSession(callerId, bookingId): if the caller is the booking's client and no session exists yet, enforces a join-time gate first (booking.starts_at must be within JOIN_WINDOW_BEFORE_MS -- throws TooEarlyToJoinError otherwise, no upper bound so a late client can still join), then creates the chat_sessions row and bills them; resuming an already-active session skips the gate. If the caller is the assigned expert, only ever attaches to an *already-existing* session (throws SessionNotStartedError otherwise) and never creates or bills one. tickSession(callerId, sessionId) authorizes either party but always resolves a separate 'payerId' (= the session's own user_id) for every balance read/write, so an expert viewing a session can never have their own wallet charged -- verified live. Locks the session row, computes elapsed/overage minutes from wall-clock time vs started_at, charges only incremental overage not yet reflected in ledger_entries, transitions active -> grace -> ended per session_rules.md. endSession() lets either participant manually end the session early. Also exports assertSessionAccess(callerId, sessionId) -- a lightweight (no row lock) version of the same client-or-assigned-expert check, reused by messages.ts and the Pusher auth endpoint so chat access rules can't drift from billing access rules."
+    },
+    {
+      "name": "pusherServer",
+      "file": "src/lib/pusherServer.ts",
+      "status": "live",
+      "description": "Singleton server-side Pusher client (app id/key/secret/cluster from env, gitignored .env.local), cached on globalThis in dev like db.ts's pool. Used by messages.ts to trigger 'new-message' events and by the Pusher auth route to sign channel subscriptions."
+    },
+    {
+      "name": "pusherClient",
+      "file": "src/lib/pusherClient.ts",
+      "status": "live",
+      "description": "Client-side Pusher singleton (getPusherClient()), configured with the public key/cluster (NEXT_PUBLIC_ env vars) and authEndpoint '/api/pusher/auth' for private-channel subscriptions. Imported by ChatWindow.tsx."
+    },
+    {
+      "name": "messages lib",
+      "file": "src/lib/messages.ts",
+      "status": "live",
+      "description": "listMessages(callerId, sessionId): authorizes via assertSessionAccess, returns all messages for a session oldest-first with sender name/role joined in. sendMessage(callerId, sessionId, body): authorizes, inserts into the messages table, then pusherServer.trigger()s a 'new-message' event on that session's private channel (private-session-{sessionId}) with the persisted row -- broadcast to every subscriber including the sender, so the client dedupes by message id rather than appending optimistically. Throws EmptyMessageError for blank input."
     }
   ],
   "apiRoutes": [
@@ -147,13 +204,31 @@
       "route": "POST /api/bookings",
       "file": "src/app/api/bookings/route.ts",
       "status": "live",
-      "description": "Body { slotType: 'standard' | 'extended' }. Calls createBooking(). 201 + booking on success, 402 if insufficient credits, 400 for an invalid slotType, 401 if unauthenticated."
+      "description": "Body { availabilitySlotId } (was { slotType } before the calendar feature -- breaking change, no external consumers). Calls createBooking(). 201 + booking on success, 402 if insufficient credits, 404 if the slot doesn't exist, 409 if it's no longer open/in the future, 401 if unauthenticated."
+    },
+    {
+      "route": "POST /api/bookings/[id]/reschedule",
+      "file": "src/app/api/bookings/[id]/reschedule/route.ts",
+      "status": "live",
+      "description": "Body { newAvailabilitySlotId }. Calls rescheduleBooking(). Both the client and the assigned expert can call it (only the client is subject to the 3-day lead-time rule). 200 + updated booking; 404 for not-found (booking or new slot), 403 for neither-client-nor-expert, 409 for not-scheduled / lead-time-expired / new-slot-not-available-or-wrong-type."
     },
     {
       "route": "POST /api/sessions/join",
       "file": "src/app/api/sessions/join/route.ts",
       "status": "live",
-      "description": "Body { bookingId }. Calls joinSession(); creates a chat_sessions row (or resumes an existing non-ended one) and marks the booking 'active'. 200 + { sessionId }, 404/403/409 for not-found/not-yours/not-joinable."
+      "description": "Body { bookingId }. Calls joinSession(); for the booking's client, creates a chat_sessions row (or resumes an existing non-ended one) and marks the booking 'active'; for the assigned expert, only attaches to an existing session. 200 + { sessionId }, 404/403/409 for not-found / neither client-nor-expert / not-joinable / (expert-only) session-not-started-yet / (client-only, new) too-early-to-join."
+    },
+    {
+      "route": "POST /api/admin/availability-slots",
+      "file": "src/app/api/admin/availability-slots/route.ts",
+      "status": "live",
+      "description": "Body { slotType, startsAt }. Expert-only (role !== 'expert' -> 403, first route in the app to gate on role). Calls createAvailabilitySlot(). 201 + slot; 409 if it overlaps an existing slot, 400 if startsAt isn't in the future or slotType is invalid."
+    },
+    {
+      "route": "POST /api/admin/availability-slots/[id]/cancel",
+      "file": "src/app/api/admin/availability-slots/[id]/cancel/route.ts",
+      "status": "live",
+      "description": "Expert-only. Calls cancelAvailabilitySlot() -- only works on a still-'open' (unbooked) slot. 200 on success; 404/403/409 for not-found/not-yours/not-open."
     },
     {
       "route": "POST /api/sessions/[id]/tick",
@@ -172,6 +247,24 @@
       "file": "src/app/api/bookings/[id]/cancel/route.ts",
       "status": "live",
       "description": "Calls cancelBooking(). Returns { refundPercent, refundAmount } on success. 404/403/409 for not-found/not-yours/not-cancellable (already active or finished). Called by BookingActions' 'Cancel' button, shown only for 'scheduled' (not yet joined) bookings."
+    },
+    {
+      "route": "GET/POST /api/sessions/[id]/messages",
+      "file": "src/app/api/sessions/[id]/messages/route.ts",
+      "status": "live",
+      "description": "GET returns { messages } via listMessages() (404/403 for not-found/not-yours). POST { text } validates length (<=2000 chars, non-empty) and calls sendMessage(), which persists and broadcasts over Pusher; returns the saved message, 201. Both endpoints share the exact same client-or-assigned-expert authorization as billing (via assertSessionAccess)."
+    },
+    {
+      "route": "GET /api/sessions/[id]/export",
+      "file": "src/app/api/sessions/[id]/export/route.ts",
+      "status": "live",
+      "description": "Streams the full message history for a session as a downloadable .txt file (Content-Disposition: attachment), one line per message formatted as '[timestamp] Sender: body'. Plain <a href> link in ChatWindow -- no JS needed, the browser's normal same-origin cookie auth + the Content-Disposition header handle the download. Same access rule as everything else (client or assigned expert only)."
+    },
+    {
+      "route": "POST /api/pusher/auth",
+      "file": "src/app/api/pusher/auth/route.ts",
+      "status": "live",
+      "description": "Pusher's required channel-authorization endpoint for private channels. Reads socket_id/channel_name from the form-encoded request Pusher's client SDK sends, validates the channel is a 'private-session-{id}' one, runs the same assertSessionAccess check, then returns pusherServer.authorizeChannel()'s signed response. This is what actually prevents an unrelated user from eavesdropping on a session's live messages -- verified directly: an unrelated third account got 403 from this endpoint (and from GET/POST messages and the export route)."
     }
   ],
   "plannedApiRoutes": [
@@ -183,13 +276,15 @@
     "schemaFile": "schema.sql",
     "engine": "PostgreSQL / Neon serverless, pooled connection",
     "tables": [
-      { "name": "users", "purpose": "Account records (id UUID, email, name)" },
+      { "name": "users", "purpose": "Account records (id UUID, email, name, role: 'user' | 'expert')" },
       { "name": "ledger_entries", "purpose": "Append-only credit ledger; balance = SUM(amount) per user" },
       { "name": "payments", "purpose": "Razorpay order/payment records with status tracking" },
-      { "name": "bookings", "purpose": "Time slot bookings (starts_at, ends_at, included_minutes)" },
-      { "name": "chat_sessions", "purpose": "Active/grace/ended chat sessions tied to a booking; grace_started_at (added 2026-07-01) tracks the 2-minute top-up window after balance hits 0" }
+      { "name": "availability_slots", "purpose": "The expert's calendar -- a row is a bookable window (expert_id, slot_type, starts_at, ends_at, status: 'open'/'booked'/'cancelled'). Added 2026-07-03." },
+      { "name": "bookings", "purpose": "A client's claim on an availability slot (starts_at, ends_at, included_minutes, expert_id, availability_slot_id, slot_type -- all snapshotted at booking time, never re-derived live)" },
+      { "name": "chat_sessions", "purpose": "Active/grace/ended chat sessions tied to a booking; grace_started_at (added 2026-07-01) tracks the 2-minute top-up window after balance hits 0" },
+      { "name": "messages", "purpose": "Persisted chat history (session_id, sender_id, body, created_at), added 2026-07-03. Source of truth for both the live Pusher broadcast and the .txt export -- Pusher itself does not retain history." }
     ],
-    "notes": "Live Neon Postgres database. schema.sql applied 2026-07-01 -- all 5 tables exist and are in active use (users, ledger_entries, bookings, chat_sessions); payments is still empty, waiting on Razorpay. Schema additions beyond the original draft: users.password_hash (Credentials auth; made nullable again on 2026-07-01 for Google-only accounts), chat_sessions.grace_started_at (grace-period tracking). Connection string lives in .env.local (gitignored) as DATABASE_URL; src/lib/db.ts exports a pooled client + withTransaction() helper. Note: an older ad-hoc 'users' table (integer id, username/password, 2 rows) existed in this DB before schema.sql was applied and was intentionally dropped in favor of the UUID/email schema. Also note: ledger_entries.user_id has no ON DELETE CASCADE, so deleting a user with ledger rows requires deleting those rows first (FK is RESTRICT by default); the same applies to chat_sessions.booking_id -> bookings.id (delete chat_sessions before bookings when cleaning up test data)."
+    "notes": "Live Neon Postgres database. schema.sql applied 2026-07-01 -- all 7 tables exist and are in active use (users, ledger_entries, bookings, availability_slots, chat_sessions, messages); payments is still empty, waiting on Razorpay. Schema additions beyond the original draft: users.password_hash (nullable, Credentials + Google), chat_sessions.grace_started_at (grace-period tracking), users.role and bookings.expert_id (expert feature), messages table (real-time chat), availability_slots table + bookings.availability_slot_id/slot_type (2026-07-03, the calendar/scheduling feature -- bookings no longer instantiate starts_at=NOW(), they claim a real future slot from this table). One demo expert account is seeded directly in the DB (email expert@astrochat.demo, role='expert') -- not creatable via the public signup form. createBooking() auto-assigns whichever user has role='expert' to every new booking (there's only ever been the one) via the slot's expert_id. Connection string lives in .env.local (gitignored) as DATABASE_URL; src/lib/db.ts exports a pooled client + withTransaction() helper. Note: an older ad-hoc 'users' table (integer id, username/password, 2 rows) existed in this DB before schema.sql was applied and was intentionally dropped in favor of the UUID/email schema. Also note: none of the FKs here (ledger_entries.user_id, chat_sessions.booking_id, messages.session_id, bookings.availability_slot_id) have ON DELETE CASCADE, so deleting a row with dependents requires deleting those first (FK is RESTRICT by default) -- confirmed again while writing this feature's test-data cleanup scripts, which now null out availability_slot_id before deleting slots."
   },
   "userFlows": [
     {
@@ -240,34 +335,95 @@
       "name": "Book & join a chat session",
       "status": "live",
       "steps": [
-        "Dashboard lists real upcoming bookings (BookingActions island) and offers 'Book Standard' (50cr/30min) or 'Book Extended' (90cr/60min)",
-        "POST /api/bookings debits the slot cost from the wallet and creates the booking, inside one transaction guarded by a per-user Postgres advisory lock (prevents a double-click from double-booking past the balance)",
-        "Booking auto-joins: POST /api/sessions/join creates a chat_sessions row (started_at = NOW()) and marks the booking 'active', then the browser navigates to /app/chat/[sessionId]",
+        "Dashboard lists the expert's real open calendar slots (BookingActions island, from listOpenSlots()) -- real date/time/type/price, not generic 'Book Standard/Extended' buttons",
+        "POST /api/bookings claims a specific slot: locks it, verifies it's still open and in the future, debits the wallet, creates the booking (snapshotting starts_at/ends_at/included_minutes/slot_type from the slot), inside one transaction guarded by a per-user advisory lock (prevents a double-click from double-booking past the balance) and a row lock on the slot (prevents two clients claiming the same slot)",
+        "Booking does NOT auto-join anymore -- the slot may be scheduled well in the future. The booking appears in the Sessions list with Join disabled ('Not yet') until within 10 minutes of its real starts_at",
+        "Once within the join window: POST /api/sessions/join creates a chat_sessions row (started_at = NOW(), the actual click time -- billing is still tied to real join time, never the scheduled time) and marks the booking 'active', then the browser navigates to /app/chat/[sessionId]",
         "Chat page calls tickSession() server-side for the authoritative initial state; ChatWindow then polls POST /api/sessions/[id]/tick every 5s",
         "tickSession computes elapsed/overage minutes from wall-clock time vs started_at and charges only newly-incurred overage minutes (derived from the ledger, so concurrent ticks can't double-charge) at 2 credits/min, per session_rules.md",
         "When balance <= 0: status -> 'grace' (2-minute countdown shown in the UI); if the user tops up during grace, billing resumes; if not, status -> 'ended' and the booking -> 'completed'",
         "'Leave' button in ChatWindow calls POST /api/sessions/[id]/end to end early",
-        "Verified end-to-end by backdating a session's started_at/grace_started_at in the DB to simulate 30+ minutes of overage: overage charges landed correctly, grace period triggered at balance <= 0 with an accurate countdown, hard stop fired after the grace window, and a follow-up booking attempt with a negative balance was correctly rejected (402)"
+        "Verified end-to-end: booked a slot ~20 min out, confirmed Join stayed disabled, backdated the slot to within the 10-min window in the DB, confirmed Join became clickable and started a real session with billing at actual click time; also re-verified overage/grace/hard-stop still work unchanged by backdating started_at/grace_started_at as in earlier passes."
       ]
     },
     {
       "name": "Cancel a booking",
       "status": "live",
       "steps": [
-        "User clicks 'Cancel' on a not-yet-joined ('scheduled') booking in the dashboard's Sessions panel (button is hidden for 'active'/joined bookings)",
-        "POST /api/bookings/[id]/cancel -> cancelBooking(): looks up how much was originally paid from the booking's slot_booking ledger entry, then applies the tiered refund policy from session_rules.md based on how the current time compares to the booking's starts_at/ends_at",
-        "100% refund if cancelled more than 24h before starts_at, 50% otherwise, 0% if the booking's whole window (ends_at) already passed without ever being joined (no-show)",
-        "Refund (if any) is inserted as a 'refund' ledger_entries row; booking status -> 'cancelled'; attempting to cancel an already-'active' booking returns 409 ('leave it instead') and an already-finished booking also 409",
-        "Verified all three refund tiers end-to-end: a default fresh booking (starts_at ~= now) refunded at 50%; a booking with starts_at manually pushed 2 days out refunded at 100%; a booking with ends_at pushed into the past (unjoined) refunded at 0%; cancelling an already-joined ('active') booking was correctly rejected with 409. Dashboard balance and the visible booking list updated correctly via router.refresh() after a successful cancel."
+        "Client cancels a not-yet-joined ('scheduled') booking from BookingActions, or the expert cancels ANY of their assigned scheduled bookings from AdminBookingsList on /app/admin -- both call the same POST /api/bookings/[id]/cancel -> cancelBooking()",
+        "Refund policy now depends on who's cancelling: client-initiated keeps the original tiered policy (100% if >24h before starts_at, 50% otherwise, 0% no-show past ends_at unjoined); expert-initiated is ALWAYS 100%, regardless of timing -- business-initiated, not the client's fault",
+        "Refund (if any) always credits the client's ledger (booking.user_id), never whichever party actually clicked cancel; booking status -> 'cancelled'; the tied availability_slots row releases back to 'open' if its time hasn't passed, freeing it for another client to book",
+        "Attempting to cancel an already-'active' booking returns 409 ('leave it instead') and an already-finished booking also 409, for either caller",
+        "Verified end-to-end: client-cancelled a >24h-out booking (100%) confirming the original tiered logic still works unchanged; separately booked a <24h-out slot and cancelled it AS THE EXPERT, confirming a full 100% refund (which would have been 50% if the client had cancelled it) landed correctly on the client's ledger with zero ledger activity on the expert's own account; confirmed the freed slot reappeared as 'open' after each cancel."
+      ]
+    },
+    {
+      "name": "Reschedule a booking",
+      "status": "live",
+      "steps": [
+        "New capability. Either the client (from their dashboard) or the assigned expert (from /app/admin) can reschedule a 'scheduled' booking to a different open slot of the SAME slot_type -- POST /api/bookings/[id]/reschedule -> rescheduleBooking()",
+        "Client-initiated reschedules require the CURRENT booking to start more than 3 days from now (RescheduleWindowExpiredError / 409 otherwise) -- the assigned expert is exempt from this restriction and can reschedule however soon the session is",
+        "The new slot must be open, in the future, the same type, and the same expert; the old slot releases back to 'open', the new one is claimed, and the booking's starts_at/ends_at update to match -- no ledger entries at all, since cost/duration never change via reschedule",
+        "Verified end-to-end: client successfully rescheduled a booking scheduled >3 days out; a client attempt to reschedule a <3-days-out booking was correctly rejected with 409; the SAME booking was then successfully rescheduled by the expert instead, proving the exemption; a cross-type reschedule attempt (standard -> extended) was correctly rejected."
+      ]
+    },
+    {
+      "name": "Expert manages their availability calendar",
+      "status": "live",
+      "steps": [
+        "New capability, on /app/admin (expert-only -- non-experts are redirected to /app/dashboard, and the two new admin API routes return 403 for non-experts, verified directly)",
+        "Expert creates a slot (slot type dropdown + datetime-local picker, converted to a proper ISO timestamp client-side to avoid timezone ambiguity) -> POST /api/admin/availability-slots -> createAvailabilitySlot(): validates the time is in the future and doesn't overlap an existing slot, inserts status='open'",
+        "Expert can cancel a still-open (unbooked) slot directly -> POST /api/admin/availability-slots/[id]/cancel; a booked slot can only be freed by cancelling/rescheduling the booking that claimed it, not the slot itself",
+        "Newly created open slots appear immediately on clients' dashboards as bookable options (both pages read from the same availability_slots table)",
+        "Verified end-to-end: created three slots (two standard, one extended) as the expert, confirmed they appeared correctly (name, time, price) on a client's dashboard in chronological order, confirmed booking one flipped it to 'booked' and removed it from the bookable list."
+      ]
+    },
+    {
+      "name": "View ledger history",
+      "status": "live",
+      "steps": [
+        "User clicks 'Ledger History' in the dashboard's Quick Actions (now a real Link, not a dead button) -> /app/ledger",
+        "listLedgerEntries(userId) returns every ledger_entries row for the user, newest first",
+        "Each row shows a human label (Credit purchase / Slot booking / Overage charge / Refund), the free-text description, timestamp, and the signed amount (green +N, red -N)",
+        "Verified end-to-end: a test user's purchase (+200) and slot booking (-50) both appeared correctly labeled, ordered, and colored."
+      ]
+    },
+    {
+      "name": "Expert views and joins an assigned session",
+      "status": "live",
+      "steps": [
+        "A booking is auto-assigned to the (one, seeded) demo expert at creation time (bookings.expert_id)",
+        "Expert logs in with the seeded demo account (role='expert') and sees a completely different dashboard: 'Client Sessions' listing bookings assigned to them (client name, slot length, time), no wallet/quick-actions",
+        "While the booking is still 'scheduled' (client hasn't joined yet), the expert sees 'Waiting for client' instead of a Join button",
+        "Once the client joins (booking -> 'active'), the expert's 'Join Session' button becomes active; clicking it calls the same POST /api/sessions/join, which for an expert caller only ever attaches to the client's already-existing chat_sessions row (never creates or bills one)",
+        "The expert lands on the exact same /app/chat/[id] session as the client and sees the same live billing state (balance, status, grace countdown) -- verified this reflects the client's real wallet (e.g. 100 credits), not the expert's own (which would be 0, since experts never accrue ledger_entries)",
+        "Verified end-to-end in browser: booked and joined as the client, switched accounts, confirmed the expert dashboard listed the session correctly (both before and after the client joined), joined as the expert, and confirmed the shared session state matched the client's."
+      ]
+    },
+    {
+      "name": "Real-time chat messaging + export",
+      "status": "live",
+      "steps": [
+        "Chat page loads message history server-side (listMessages) and passes it to ChatWindow as initialMessages, alongside the viewer's own userId",
+        "ChatWindow subscribes to the session's private Pusher channel (private-session-{sessionId}) via a client-side Pusher connection authorized through POST /api/pusher/auth (which enforces the same client-or-assigned-expert rule as billing)",
+        "Sending a message POSTs to /api/sessions/[id]/messages, which persists it to the messages table and triggers a 'new-message' Pusher event to that channel; the sender does NOT append it optimistically -- it only appears once the real Pusher event round-trips back, which is itself the proof the live pipeline works end-to-end rather than a local echo",
+        "Own vs. other-party messages are visually distinguished (right/accent vs. left/white bubble) by comparing each message's senderId to the viewer's own id, not a fixed role -- so the same UI works correctly for both the client and the expert viewing the same session",
+        "'Export Chat' is a plain link to GET /api/sessions/[id]/export, which streams the full history as a downloadable chat-{id}.txt file (timestamp, sender name, message per line)",
+        "Verified end-to-end in browser: sent a message and watched it arrive purely via the Pusher round-trip (no optimistic UI); reloaded the page and confirmed it persisted; sent a second message and fetched the export endpoint directly, confirming both messages appeared correctly formatted with the right Content-Type/Content-Disposition headers; created an unrelated third account and confirmed it got 403 from all four surfaces (list messages, send, export, and the Pusher channel-auth endpoint itself -- so an outsider can't even subscribe to eavesdrop)."
       ]
     }
   ],
   "knownGaps": [
     "payments table still unused -- no Razorpay integration code yet (design only, in razorpay_flow.md), so there is still no real way to add credits other than a manual DB insert",
-    "Chat messaging is still a local-only mock (canned auto-reply, nothing persisted, no second party) -- billing is real but the 'chat' itself isn't yet",
     "Pricing page 'Buy Now' buttons have no onClick handlers",
-    "Dashboard Quick Actions (Find Expert / Ledger History / Settings) are still dead buttons -- e.g. there's no ledger-history view even though the data exists",
-    "The cancellation policy's >24h full-refund tier is effectively unreachable under the current 'book now, join now' flow (starts_at is always ~= booking time, never far in the future) unless a test manually pushes starts_at out -- it will become reachable once/if real advance scheduling is added",
+    "Chat messages are plain text only -- no file/image attachments, no read receipts, no typing indicators, no message editing/deletion",
+    "Pusher is on its free tier with no monitoring/alerting set up -- if usage grows past free-tier limits (200k msgs/day, 100 concurrent connections) messages would start failing silently from the client's point of view (trigger() would throw server-side, logged via console.error, but nothing surfaces that to the user yet)",
+    "Dashboard 'Find Expert' quick action is still a dead button -- there's no real expert marketplace/matching, just the one auto-assigned demo expert",
+    "Only one expert exists (seeded demo account) and every booking auto-assigns to them -- no real onboarding flow for additional experts, no admin UI to create/manage them, and the public signup form has no way to become an expert (by design, but worth noting as a gap if multi-expert support is ever wanted); AdminBookingsList/AvailabilityManager both implicitly assume the logged-in expert IS the sole admin",
+    "Availability slots are created one at a time, manually, by the expert -- no recurring weekly-pattern generation (e.g. 'available Mon-Fri 9-5'), deliberately deferred",
+    "No way to edit an existing open slot's time in place -- only cancel + create a new one covers that; cross-type reschedule is also blocked by design (would require a price/duration delta mid-booking)",
+    "Slot pricing (SLOT_TYPES: standard/extended) is still a hardcoded constant, not admin-editable -- dynamic per-tier pricing was explicitly scoped out of the calendar feature (a real, larger, deferred piece of work)",
+    "datetime-local slot creation relies on the browser's local timezone via new Date(value).toISOString() -- correct for a single-timezone demo, but worth revisiting if the expert and clients are ever expected to be in meaningfully different timezones (no explicit timezone display/conversion in the UI)",
     "No email verification, password reset, or rate limiting on /api/register or the credentials login",
     "No migration tool -- schema changes (password_hash, grace_started_at) are applied via one-off scripts, not tracked migrations",
     "JWT session strategy means a deleted/disabled user's session stays valid until the token expires (30-day default) -- session isn't re-checked against the DB on every request",
@@ -282,6 +438,9 @@
     { "date": "2026-07-01", "change": "Wired real credit balance: moved NextAuthOptions into src/lib/auth.ts (shared, reusable), added src/lib/ledger.ts (getBalance), GET /api/user/balance, and auth guards + real balance on /app/dashboard and /app/chat/[id] (replacing hardcoded 350 and 10). Verified end-to-end: unauthenticated users redirect to /user/login; a fresh signup shows 0 credits; manually inserting ledger_entries rows (+250 purchase, -50 booking) immediately shows 200 on both the dashboard and the chat page after refresh." },
     { "date": "2026-07-01", "change": "Built the full booking + session-join + server-authoritative billing loop per session_rules.md: src/lib/sessionRules.ts (constants), src/lib/bookings.ts (createBooking with a per-user advisory lock, listUpcomingBookings), src/lib/sessions.ts (joinSession, tickSession -- the billing engine, endSession), POST /api/bookings, POST /api/sessions/join, POST /api/sessions/[id]/tick, POST /api/sessions/[id]/end. Added chat_sessions.grace_started_at column. New BookingActions island wired into the dashboard (replacing the hardcoded session); ChatWindow rewritten to poll the tick endpoint every 5s instead of a fake client-side timer, plus a 'Leave' button. Verified end-to-end in browser, including forcing overage/grace/hard-stop by backdating started_at and grace_started_at in the DB: overage billed correctly (4 min over -> 8 credits), grace period triggered exactly at balance <= 0 with an accurate countdown, hard stop fired after the grace window ended (booking flipped to 'completed'), and a booking attempt with a negative balance was correctly rejected with 402. Also confirmed the background poll and manual test calls overlapping never double-charged, validating the row-lock + ledger-derived 'already billed' design." },
     { "date": "2026-07-01", "change": "Added booking cancellation with tiered refunds per session_rules.md: cancelBooking() in src/lib/bookings.ts, POST /api/bookings/[id]/cancel, and a Cancel button in BookingActions (shown only for not-yet-joined bookings). Refactored BookingNotFoundError/ForbiddenError to live in bookings.ts as the single source, re-exported from sessions.ts (previously duplicated). Verified all three refund tiers end-to-end (50% default, 100% when cancelled >24h ahead, 0% no-show) plus the 409 block on cancelling an already-active session -- balance and the dashboard list updated correctly after each." },
-    { "date": "2026-07-01", "change": "Added real Google sign-in/sign-up (user provided a Google Cloud OAuth Client ID/Secret, added to .env.local, gitignored). Re-added GoogleProvider to src/lib/auth.ts with real credentials; made users.password_hash nullable (schema.sql + live DB migration) since Google accounts don't set one; added findOrCreateOAuthUser() to src/lib/users.ts (atomic ON CONFLICT upsert) so a Google sign-in links to an existing password-based account by email instead of creating a duplicate, without touching that account's password; verifyUser() now guards against a NULL password_hash. Added a shared GoogleIcon component and 'Continue with Google' buttons to both /user/login and /user/signup. Verified: the button correctly redirects to accounts.google.com with the right client_id/redirect_uri/PKCE; the account-linking upsert logic verified directly against the DB (new user created, repeat sign-in reuses the same row, linking to an existing password account preserves that password). The full interactive Google consent round-trip needs a real Google login and wasn't completed by an automated test -- that's on the user to click through themselves." }
+    { "date": "2026-07-01", "change": "Added real Google sign-in/sign-up (user provided a Google Cloud OAuth Client ID/Secret, added to .env.local, gitignored). Re-added GoogleProvider to src/lib/auth.ts with real credentials; made users.password_hash nullable (schema.sql + live DB migration) since Google accounts don't set one; added findOrCreateOAuthUser() to src/lib/users.ts (atomic ON CONFLICT upsert) so a Google sign-in links to an existing password-based account by email instead of creating a duplicate, without touching that account's password; verifyUser() now guards against a NULL password_hash. Added a shared GoogleIcon component and 'Continue with Google' buttons to both /user/login and /user/signup. Verified: the button correctly redirects to accounts.google.com with the right client_id/redirect_uri/PKCE; the account-linking upsert logic verified directly against the DB (new user created, repeat sign-in reuses the same row, linking to an existing password account preserves that password). The full interactive Google consent round-trip needs a real Google login and wasn't completed by an automated test -- that's on the user to click through themselves." },
+    { "date": "2026-07-02", "change": "Removed the dead dashboard 'Settings' quick action. Built out Ledger History as a real page (/app/ledger, src/lib/ledger.ts's new listLedgerEntries()) and wired the dashboard's 'Ledger History' quick action to link there instead of doing nothing. Added a basic expert role: users.role and bookings.expert_id columns (migrated live), one seeded demo expert account (real login, not creatable via public signup), createBooking() auto-assigns it to every new booking, and the dashboard now branches entirely by role -- clients see the existing wallet/booking view (now showing the assigned expert's name per booking), experts see a new 'Client Sessions' view (ExpertSessions island, src/lib/bookings.ts's new listAssignedBookings()) listing bookings assigned to them with a Join button that only activates once the client has started the session. Refactored src/lib/sessions.ts's joinSession/tickSession/endSession to distinguish the caller (client or assigned expert) from the payer (always the booking's client) so an expert can view/join a session without ever touching its billing -- verified live end-to-end: booked and joined as the client, switched to the seeded expert account, saw the assigned session (correctly gated on 'waiting for client' before the client joined), joined it as the expert once active, and confirmed the expert saw the client's real balance (not their own, which would be 0)." },
+    { "date": "2026-07-03", "change": "Replaced ChatWindow's local-only mock messages with real, persisted, real-time chat over Pusher Channels (user provided app_id/key/secret/cluster, stored in .env.local). Added the messages table; src/lib/pusherServer.ts and pusherClient.ts (singleton clients, mirroring the db.ts pattern); src/lib/messages.ts (listMessages/sendMessage, both authorized via a new assertSessionAccess() helper extracted from sessions.ts's existing client-or-assigned-expert rule, so chat access can't drift from billing access); GET/POST /api/sessions/[id]/messages; POST /api/pusher/auth (the private-channel authorization endpoint Pusher requires, gated by the same access check); GET /api/sessions/[id]/export (streams the conversation as a downloadable .txt). ChatWindow now loads history server-side, subscribes to the session's private channel, and renders messages as they arrive via the real Pusher event (deliberately not appended optimistically, so seeing a sent message appear is itself proof the round-trip works) with own/other styling based on senderId rather than a fixed role. Verified end-to-end: a message sent in-browser arrived purely through the Pusher round-trip; it persisted across a reload; the export endpoint returned a correctly formatted, correctly-headered .txt with both messages; and an unrelated third account was correctly rejected (403) from reading, sending, exporting, and even subscribing to the channel via the auth endpoint." },
+    { "date": "2026-07-03", "change": "Replaced the 'book now, join now' model with a real calendar: new availability_slots table (expert-created, one at a time, open/booked/cancelled) and bookings.availability_slot_id/slot_type columns. src/lib/availability.ts (createAvailabilitySlot with overlap detection, listOpenSlots, listAllSlotsForExpert, cancelAvailabilitySlot). createBooking() reworked to claim a specific real slot (locks it, validates open+future, snapshots its time/type onto the booking) instead of instantiating starts_at=NOW(); POST /api/bookings body changed to {availabilitySlotId}. cancelBooking() refund policy now branches by caller: client keeps the original tiered policy, expert-initiated is ALWAYS 100% regardless of timing (a real behavioral fork, not just wider authorization) -- and the refund ledger entry now always credits booking.user_id rather than the caller, a correctness fix that mattered once the expert could also cancel. New rescheduleBooking() moves a 'scheduled' booking to a different open same-type slot; client-initiated reschedules require >3 days' lead time (RESCHEDULE_MIN_LEAD_TIME_MS), the expert is exempt. joinSession() gained a join-time gate (JOIN_WINDOW_BEFORE_MS, 10min) so a client can't start billing on a session long before its scheduled time; TooEarlyToJoinError. New /app/admin page (expert-only, first route gated on role) with AvailabilityManager (create/cancel slots) and AdminBookingsList (all bookings, cancel, reschedule) islands; new API routes POST /api/admin/availability-slots(+[id]/cancel) and POST /api/bookings/[id]/reschedule. BookingActions.tsx reworked to list real open slots instead of two hardcoded type buttons, gate Join client-side by time, and add an inline reschedule picker. Dynamic slot-type pricing was explicitly dropped from this pass per user feedback on the first draft of the plan. Caught and fixed a real bug during verification: booking used to auto-join immediately, which is wrong once bookings can be far in the future (the join attempt would just fail against the new time gate and silently strand the booking) -- fixed to book-then-refresh instead. Verified extensively end-to-end: join stays disabled until the 10-min window and then works with billing at real click time; client cancellation tiers unchanged; expert cancellation confirmed always-100% (including on a <24h booking that would've been 50% for the client) with the refund correctly landing on the client's ledger and zero activity on the expert's; reschedule succeeded for a >3-day-out booking and correctly failed for the client on a <3-day one while succeeding for the expert on the identical booking; cross-type reschedule and double-booking a slot both correctly rejected with 409; non-expert access to both new admin routes correctly rejected with 403." }
   ]
 }
