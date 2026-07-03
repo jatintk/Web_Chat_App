@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import GoogleIcon from '@/components/ui/GoogleIcon';
@@ -51,6 +52,10 @@ export default function LoginPage() {
 
                 <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required style={inputStyle} />
                 <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required style={inputStyle} />
+
+                <Link href="/user/forgot-password" style={{ alignSelf: 'flex-end', fontSize: '0.85rem', color: 'var(--text-secondary)', textDecoration: 'none', marginTop: '-0.75rem' }}>
+                    Forgot password?
+                </Link>
 
                 <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '0.5rem' }} disabled={submitting}>
                     {submitting ? 'Logging in…' : 'Log In'}

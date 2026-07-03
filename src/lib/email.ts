@@ -57,6 +57,21 @@ export async function sendBookingNotificationEmail(params: {
   });
 }
 
+export async function sendPasswordResetEmail(params: { toEmail: string; resetUrl: string }): Promise<void> {
+  const resendClient = getResendClient();
+  if (!resendClient) {
+    console.error('Password reset email skipped: RESEND_API_KEY is not set.');
+    return;
+  }
+
+  await resendClient.emails.send({
+    from: 'AstroChat <onboarding@resend.dev>',
+    to: params.toEmail,
+    subject: 'Reset your AstroChat password',
+    text: `We received a request to reset your AstroChat password. Click the link below to choose a new one (valid for 1 hour):\n\n${params.resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`,
+  });
+}
+
 // Best-effort trigger, called from POST /api/bookings after createBooking
 // succeeds -- failures are swallowed by the caller (console.error only),
 // mirroring how sendMessage treats a Pusher trigger() failure.

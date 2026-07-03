@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getUserProfile } from '@/lib/users';
 import ProfileForm from '@/components/islands/ProfileForm';
+import ChangePasswordForm from '@/components/islands/ChangePasswordForm';
 import styles from '../ledger/page.module.css';
 
 export const metadata: Metadata = {
@@ -45,6 +46,10 @@ export default async function ProfilePage() {
             placeOfBirth: profile?.placeOfBirth ?? null,
           }}
         />
+      </div>
+
+      <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>
+        <ChangePasswordForm hasPassword={profile?.hasPassword ?? false} />
       </div>
     </div>
   );
