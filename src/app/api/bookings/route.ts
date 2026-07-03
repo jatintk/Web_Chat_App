@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { createBooking, InsufficientCreditsError, SlotNotFoundError, SlotNotAvailableError } from '@/lib/bookings';
+import { notifyExpertOfBooking } from '@/lib/email';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -11,12 +12,16 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => null);
   const availabilitySlotId = typeof body?.availabilitySlotId === 'string' ? body.availabilitySlotId : '';
+  const note = typeof body?.note === 'string' ? body.note.trim() : undefined;
   if (!availabilitySlotId) {
     return NextResponse.json({ error: 'availabilitySlotId is required.' }, { status: 400 });
   }
 
   try {
-    const booking = await createBooking(session.user.id, availabilitySlotId);
+    const booking = await createBooking(session.user.id, availabilitySlotId, note);
+    notifyExpertOfBooking(session.user.id, booking).catch((err) =>
+      console.error('Booking notification email failed:', err)
+    );
     return NextResponse.json({ booking }, { status: 201 });
   } catch (err) {
     if (err instanceof InsufficientCreditsError) {

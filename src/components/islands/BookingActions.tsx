@@ -26,6 +26,8 @@ export type OpenSlot = {
 
 type Props = {
   bookings: UpcomingBooking[];
+  // Only used to populate the reschedule target picker below -- browsing and
+  // booking new slots now happens on the dedicated /app/slots page.
   slots: OpenSlot[];
 };
 
@@ -33,7 +35,6 @@ export default function BookingActions({ bookings, slots }: Props) {
   const router = useRouter();
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const [bookingSlotId, setBookingSlotId] = useState<string | null>(null);
   const [reschedulingBookingId, setReschedulingBookingId] = useState<string | null>(null);
   const [rescheduleTarget, setRescheduleTarget] = useState<string>('');
   const [confirmingRescheduleId, setConfirmingRescheduleId] = useState<string | null>(null);
@@ -89,31 +90,6 @@ export default function BookingActions({ bookings, slots }: Props) {
       router.refresh();
     } finally {
       setCancellingId(null);
-    }
-  }
-
-  async function bookSlot(slotId: string) {
-    setError(null);
-    setNotice(null);
-    setBookingSlotId(slotId);
-    try {
-      const res = await fetch('/api/bookings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ availabilitySlotId: slotId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Could not book this slot.');
-        return;
-      }
-      // Don't auto-join -- the slot may be scheduled well in the future, in
-      // which case Join stays disabled until within the join window. Just
-      // refresh so the new booking shows up in the list above.
-      setNotice('Booked! You can join once the session is about to start.');
-      router.refresh();
-    } finally {
-      setBookingSlotId(null);
     }
   }
 
@@ -223,27 +199,6 @@ export default function BookingActions({ bookings, slots }: Props) {
           })}
         </div>
       )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        {slots.length === 0 ? (
-          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            No slots are open to book right now.
-          </p>
-        ) : (
-          slots.map((s) => (
-            <button
-              key={s.id}
-              className="btn-primary"
-              onClick={() => bookSlot(s.id)}
-              disabled={bookingSlotId !== null}
-            >
-              {bookingSlotId === s.id
-                ? 'Booking…'
-                : `Book ${new Date(s.startsAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} — ${s.slotType} (${s.cost} credits, ${s.includedMinutes} min)`}
-            </button>
-          ))
-        )}
-      </div>
     </div>
   );
 }

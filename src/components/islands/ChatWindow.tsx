@@ -20,23 +20,31 @@ interface ChatWindowProps {
   initialState: SessionState;
   initialMessages: ChatMessage[];
   viewerId: string;
+  isViewerExpert: boolean;
 }
 
 const TICK_INTERVAL_MS = 5000;
 
-export default function ChatWindow({ sessionId, initialState, initialMessages, viewerId }: ChatWindowProps) {
+export default function ChatWindow({ sessionId, initialState, initialMessages, viewerId, isViewerExpert }: ChatWindowProps) {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [state, setState] = useState<SessionState>(initialState);
-  const [leaving, setLeaving] = useState(false);
+  const [ending, setEnding] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Restores focus to the message input once it's re-enabled after a send --
+  // toggling `disabled` doesn't auto-restore focus in the browser.
+  useEffect(() => {
+    if (!sending) inputRef.current?.focus();
+  }, [sending]);
 
   // Real-time messaging: subscribe to this session's private Pusher channel.
   // The server broadcasts every message (including the sender's own) after
@@ -94,13 +102,25 @@ export default function ChatWindow({ sessionId, initialState, initialMessages, v
     }
   }
 
-  async function handleLeave() {
-    setLeaving(true);
+  // Just navigate away -- no server call, session/booking state is untouched
+  // so either party can Join again from the dashboard to resume exactly where
+  // they left off. This is what makes accidental disconnects recoverable.
+  function handleLeaveSoft() {
+    router.push('/app/dashboard');
+  }
+
+  // Permanently ends the session for both parties -- unlike Leave, this is a
+  // deliberate, confirmed action (marks the booking 'completed').
+  async function handleEndSession() {
+    const confirmed = window.confirm('End this session? This closes it permanently for both you and the other party.');
+    if (!confirmed) return;
+
+    setEnding(true);
     try {
       await fetch(`/api/sessions/${sessionId}/end`, { method: 'POST' });
       router.push('/app/dashboard');
     } finally {
-      setLeaving(false);
+      setEnding(false);
     }
   }
 
@@ -116,7 +136,9 @@ export default function ChatWindow({ sessionId, initialState, initialMessages, v
             <span className="dot pulse"></span>
             <span className="status-text">
               {state.status === 'grace'
-                ? `Grace period — top up now (${state.graceSecondsRemaining}s left)`
+                ? isViewerExpert
+                  ? 'Grace period'
+                  : `Grace period — top up now (${state.graceSecondsRemaining}s left)`
                 : state.status === 'ended'
                 ? 'Session ended'
                 : `Live Session #${sessionId}`}
@@ -134,9 +156,14 @@ export default function ChatWindow({ sessionId, initialState, initialMessages, v
             <span className="credit-label">Credits left</span>
           </div>
           {state.status !== 'ended' && (
-            <button className="btn-ghost" onClick={handleLeave} disabled={leaving}>
-              {leaving ? 'Leaving…' : 'Leave'}
-            </button>
+            <>
+              <button className="btn-ghost" onClick={handleLeaveSoft}>
+                Leave
+              </button>
+              <button className="btn-ghost" onClick={handleEndSession} disabled={ending}>
+                {ending ? 'Ending…' : 'End Session'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -167,6 +194,7 @@ export default function ChatWindow({ sessionId, initialState, initialMessages, v
           <form onSubmit={handleSend} className="input-form">
             {sendError && <p style={{ color: '#ef4444', margin: '0 0 0.5rem', fontSize: '0.85rem' }}>{sendError}</p>}
             <input
+              ref={inputRef}
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -184,10 +212,16 @@ export default function ChatWindow({ sessionId, initialState, initialMessages, v
           </form>
         ) : (
           <div className="out-of-credits">
-            <p>Session ended. {state.balance <= 0 ? 'You ran out of credits.' : ''}</p>
-            <button className="btn-primary" onClick={() => window.location.href = '/pricing'}>
-              Top Up Credits
-            </button>
+            <p>
+              {isViewerExpert
+                ? 'This session has ended.'
+                : `Session ended. ${state.balance <= 0 ? 'You ran out of credits.' : ''}`}
+            </p>
+            {!isViewerExpert && (
+              <button className="btn-primary" onClick={() => (window.location.href = '/pricing')}>
+                Top Up Credits
+              </button>
+            )}
           </div>
         )}
       </div>

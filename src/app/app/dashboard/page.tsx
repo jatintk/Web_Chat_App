@@ -29,9 +29,14 @@ export default async function DashboardPage() {
         <div className={styles['dashboard-header']}>
           <h1 className="gradient-text">Welcome back, {session.user.name || session.user.email}</h1>
           <p>Your assigned client sessions.</p>
-          <Link href="/app/admin" className="btn-secondary" style={{ display: 'inline-block', marginTop: '0.75rem' }}>
-            Manage Availability & Bookings
-          </Link>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem' }}>
+            <Link href="/app/admin" className="btn-secondary">
+              Manage Availability & Bookings
+            </Link>
+            <Link href="/app/chats" className="btn-secondary">
+              Past Chats
+            </Link>
+          </div>
         </div>
 
         <div className={styles['dashboard-grid']}>
@@ -117,13 +122,21 @@ export default async function DashboardPage() {
             <span className={styles['action-icon']}>⚡</span>
           </div>
           <div className={styles['action-grid']}>
-            <button className={styles['action-card']}>
+            <Link href="/app/slots" className={styles['action-card']}>
               <span className={styles.icon}>🔍</span>
-              <span>Find Expert</span>
-            </button>
+              <span>Find a Slot</span>
+            </Link>
             <Link href="/app/ledger" className={styles['action-card']}>
               <span className={styles.icon}>📜</span>
               <span>Ledger History</span>
+            </Link>
+            <Link href="/app/profile" className={styles['action-card']}>
+              <span className={styles.icon}>🧑</span>
+              <span>Profile</span>
+            </Link>
+            <Link href="/app/chats" className={styles['action-card']}>
+              <span className={styles.icon}>💬</span>
+              <span>Past Chats</span>
             </Link>
           </div>
         </div>

@@ -58,6 +58,22 @@ export async function listOpenSlots(): Promise<AvailabilitySlot[]> {
   return result.rows;
 }
 
+export type AvailabilitySlotWithExpertName = AvailabilitySlot & { expert_name: string | null };
+
+// Feeds the /app/slots "Slot Finder" page -- every client's browsable view
+// across all experts, not just the single-expert flat list listOpenSlots()
+// still serves for BookingActions' reschedule picker.
+export async function listOpenSlotsWithExpertNames(): Promise<AvailabilitySlotWithExpertName[]> {
+  const result = await pool.query(
+    `SELECT s.*, e.name AS expert_name
+     FROM availability_slots s
+     JOIN users e ON e.id = s.expert_id
+     WHERE s.status = 'open' AND s.starts_at > NOW()
+     ORDER BY s.starts_at ASC`
+  );
+  return result.rows;
+}
+
 export async function listAllSlotsForExpert(expertId: string): Promise<AvailabilitySlot[]> {
   const result = await pool.query(
     `SELECT * FROM availability_slots WHERE expert_id = $1 ORDER BY starts_at DESC`,

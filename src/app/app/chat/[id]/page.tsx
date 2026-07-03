@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { redirect, notFound } from 'next/navigation';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { tickSession, SessionNotFoundError, ForbiddenError } from '@/lib/sessions';
+import { tickSession, assertSessionAccess, SessionNotFoundError, ForbiddenError } from '@/lib/sessions';
 import { listMessages } from '@/lib/messages';
 import ChatWindow from '@/components/islands/ChatWindow';
 import styles from './page.module.css';
@@ -29,9 +29,12 @@ export default async function ChatPage({ params }: Props) {
 
   let initialState;
   let initialMessages;
+  let isViewerExpert = false;
   try {
     initialState = await tickSession(session.user.id, id);
     initialMessages = await listMessages(session.user.id, id);
+    const { booking } = await assertSessionAccess(session.user.id, id);
+    isViewerExpert = booking?.expert_id === session.user.id;
   } catch (err) {
     if (err instanceof SessionNotFoundError || err instanceof ForbiddenError) {
       notFound();
@@ -58,6 +61,7 @@ export default async function ChatPage({ params }: Props) {
         initialState={initialState}
         initialMessages={initialMessages}
         viewerId={session.user.id}
+        isViewerExpert={isViewerExpert}
       />
     </div>
   );
