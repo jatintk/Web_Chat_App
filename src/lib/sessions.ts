@@ -97,6 +97,56 @@ export async function assertSessionAccess(callerId: string, sessionId: string): 
   return { session, booking };
 }
 
+export type PastSession = {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  total_minutes_used: number;
+  slot_type: string | null;
+  expert_id: string | null;
+  expert_name: string | null;
+};
+
+export type PastSessionForExpert = {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  total_minutes_used: number;
+  slot_type: string | null;
+  client_name: string | null;
+  client_email: string;
+};
+
+// Client's own history -- mirrors listUpcomingBookings' "own only" scope.
+export async function listPastSessionsForClient(userId: string): Promise<PastSession[]> {
+  const result = await pool.query(
+    `SELECT cs.id, cs.started_at, cs.ended_at, cs.total_minutes_used, b.slot_type, b.expert_id, e.name AS expert_name
+     FROM chat_sessions cs
+     JOIN bookings b ON b.id = cs.booking_id
+     LEFT JOIN users e ON e.id = b.expert_id
+     WHERE cs.user_id = $1 AND cs.status = 'ended'
+     ORDER BY cs.started_at DESC`,
+    [userId]
+  );
+  return result.rows;
+}
+
+// Expert sees ALL their past sessions across every client -- mirrors the
+// listAssignedBookings (own upcoming) vs. listAllAssignedBookings (all
+// statuses) asymmetry already established for bookings.
+export async function listPastSessionsForExpert(expertId: string): Promise<PastSessionForExpert[]> {
+  const result = await pool.query(
+    `SELECT cs.id, cs.started_at, cs.ended_at, cs.total_minutes_used, b.slot_type, c.name AS client_name, c.email AS client_email
+     FROM chat_sessions cs
+     JOIN bookings b ON b.id = cs.booking_id
+     JOIN users c ON c.id = cs.user_id
+     WHERE b.expert_id = $1 AND cs.status = 'ended'
+     ORDER BY cs.started_at DESC`,
+    [expertId]
+  );
+  return result.rows;
+}
+
 async function getBalance(client: PoolClient, userId: string): Promise<number> {
   const result = await client.query(
     `SELECT COALESCE(SUM(amount), 0) AS balance FROM ledger_entries WHERE user_id = $1`,

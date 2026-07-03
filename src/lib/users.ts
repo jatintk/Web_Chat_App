@@ -10,6 +10,14 @@ export type PublicUser = {
   role: UserRole;
 };
 
+export type UserProfile = {
+  id: string;
+  name: string | null;
+  dateOfBirth: string | null;
+  timeOfBirth: string | null;
+  placeOfBirth: string | null;
+};
+
 export class EmailInUseError extends Error {
   constructor() {
     super('Email is already registered');
@@ -78,4 +86,60 @@ export async function findOrCreateOAuthUser(params: {
     [email, params.name ?? null]
   );
   return result.rows[0];
+}
+
+function rowToProfile(row: {
+  id: string;
+  name: string | null;
+  date_of_birth: string | Date | null;
+  time_of_birth: string | null;
+  place_of_birth: string | null;
+}): UserProfile {
+  // node-postgres parses a DATE column into a JS Date at LOCAL midnight (not
+  // a string) by default -- normalize to YYYY-MM-DD using local getters, not
+  // toISOString() (which converts to UTC and shifts the calendar date back
+  // by a day in any timezone ahead of UTC).
+  const dateOfBirth =
+    row.date_of_birth instanceof Date
+      ? `${row.date_of_birth.getFullYear()}-${String(row.date_of_birth.getMonth() + 1).padStart(2, '0')}-${String(row.date_of_birth.getDate()).padStart(2, '0')}`
+      : row.date_of_birth;
+
+  return {
+    id: row.id,
+    name: row.name,
+    dateOfBirth,
+    timeOfBirth: row.time_of_birth,
+    placeOfBirth: row.place_of_birth,
+  };
+}
+
+export async function getUserProfile(userId: string): Promise<UserProfile | null> {
+  const result = await pool.query(
+    `SELECT id, name, date_of_birth, time_of_birth, place_of_birth FROM users WHERE id = $1`,
+    [userId]
+  );
+  return result.rows[0] ? rowToProfile(result.rows[0]) : null;
+}
+
+// Takes the full profile shape rather than partial fields -- the profile form
+// is always a controlled form re-submitting its complete current state, so
+// there's no ambiguity between "field omitted" and "field cleared" to resolve.
+export async function updateUserProfile(
+  userId: string,
+  params: { name: string | null; dateOfBirth: string | null; timeOfBirth: string | null; placeOfBirth: string | null }
+): Promise<UserProfile | null> {
+  const result = await pool.query(
+    `UPDATE users
+     SET name = $2, date_of_birth = $3, time_of_birth = $4, place_of_birth = $5
+     WHERE id = $1
+     RETURNING id, name, date_of_birth, time_of_birth, place_of_birth`,
+    [userId, params.name, params.dateOfBirth, params.timeOfBirth, params.placeOfBirth]
+  );
+  return result.rows[0] ? rowToProfile(result.rows[0]) : null;
+}
+
+// Used by the booking-notification email -- keeps raw SQL out of the API route.
+export async function getUserContact(userId: string): Promise<{ email: string; name: string | null } | null> {
+  const result = await pool.query(`SELECT email, name FROM users WHERE id = $1`, [userId]);
+  return result.rows[0] ?? null;
 }

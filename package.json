@@ -16,7 +16,8 @@
     "pusher": "^5.3.4",
     "pusher-js": "^8.5.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "resend": "^6.17.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

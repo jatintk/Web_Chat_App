@@ -18,6 +18,7 @@ export type Booking = {
   ends_at: string;
   included_minutes: number;
   status: string;
+  note: string | null;
   created_at: string;
 };
 
@@ -84,7 +85,11 @@ export class SlotOverlapError extends Error {
   }
 }
 
-export async function createBooking(userId: string, availabilitySlotId: string): Promise<Booking> {
+export async function createBooking(
+  userId: string,
+  availabilitySlotId: string,
+  note?: string | null
+): Promise<Booking> {
   return withTransaction(async (client) => {
     // Per-user advisory lock avoids two concurrent bookings both reading a stale
     // balance and overdrawing the wallet (an aggregate SUM query can't take FOR UPDATE).
@@ -114,10 +119,10 @@ export async function createBooking(userId: string, availabilitySlotId: string):
     await client.query(`UPDATE availability_slots SET status = 'booked' WHERE id = $1`, [availabilitySlotId]);
 
     const bookingResult = await client.query(
-      `INSERT INTO bookings (user_id, expert_id, availability_slot_id, slot_type, starts_at, ends_at, included_minutes, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled')
+      `INSERT INTO bookings (user_id, expert_id, availability_slot_id, slot_type, starts_at, ends_at, included_minutes, status, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8)
        RETURNING *`,
-      [userId, slot.expert_id, slot.id, slotType, slot.starts_at, slot.ends_at, config.includedMinutes]
+      [userId, slot.expert_id, slot.id, slotType, slot.starts_at, slot.ends_at, config.includedMinutes, note?.trim() || null]
     );
     const booking = bookingResult.rows[0];
 
